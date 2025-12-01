@@ -1,0 +1,77 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# iOS
+iOS/Build/
+iOS/DerivedData/
+iOS/*.xcworkspace/xcuserdata/
+iOS/*.xcodeproj/xcuserdata/
+iOS/*.xcodeproj/project.xcworkspace/xcuserdata/
+iOS/Pods/
+iOS/Podfile.lock
+iOS/*.ipa
+iOS/*.dSYM.zip
+iOS/*.dSYM
+iOS/GoogleService-Info.plist
+
+# Swift Package Manager
+iOS/.swiftpm/
+iOS/Package.resolved
+
+# Node.js - Backend
+Backend/node_modules/
+Backend/dist/
+Backend/build/
+Backend/.env
+Backend/.env.local
+Backend/npm-debug.log*
+Backend/yarn-debug.log*
+Backend/yarn-error.log*
+
+# Node.js - Web (Next.js)
+Web/node_modules/
+Web/.next/
+Web/out/
+Web/.env
+Web/.env.local
+Web/.env*.local
+Web/npm-debug.log*
+Web/yarn-debug.log*
+Web/yarn-error.log*
+
+# Root node_modules (if monorepo)
+node_modules/
+
+# Logs
+*.log
+logs/
+
+# Database
+*.sql
+*.sqlite
+*.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# API Keys (backup protection)
+**/secrets/
+**/credentials/
+**/*-key.json
+**/*-credentials.json

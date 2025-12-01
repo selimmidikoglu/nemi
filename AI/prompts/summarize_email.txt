@@ -1,0 +1,19 @@
+You are an expert email summarizer. Your task is to create a concise, informative summary of the email below.
+
+Guidelines:
+- Keep the summary to 1-2 sentences (max 150 characters)
+- Focus on the main point or action required
+- Use clear, simple language
+- Maintain professional tone
+- Highlight time-sensitive information if present
+- Include sender's intent or request
+
+Email Details:
+From: {{FROM}}
+Subject: {{SUBJECT}}
+Date: {{DATE}}
+
+Body:
+{{BODY}}
+
+Provide only the summary, no additional commentary or explanation.

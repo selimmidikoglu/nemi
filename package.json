@@ -1,0 +1,55 @@
+{
+  "name": "nemi-ai-inbox-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "NemiAIInbox - AI-powered email client monorepo",
+  "workspaces": [
+    "Backend",
+    "AI",
+    "Web"
+  ],
+  "scripts": {
+    "install:all": "npm install && cd Backend && npm install && cd ../Web && npm install",
+    "dev": "./scripts/dev-all.sh",
+    "dev:all": "./scripts/dev-all.sh",
+    "dev:backend": "cd Backend && npm run dev",
+    "dev:web": "cd Web && npm run dev",
+    "dev:backend-web": "concurrently \"npm run dev:backend\" \"npm run dev:web\" --names \"backend,web\" --prefix-colors \"blue,green\"",
+    "dev:ios": "./scripts/ios-dev.sh",
+    "dev:ios-only": "./scripts/ios-dev.sh",
+    "dev:xcode": "open iOS/NemiAIInbox.xcodeproj",
+    "build": "npm run build:backend && npm run build:web",
+    "build:backend": "cd Backend && npm run build",
+    "build:web": "cd Web && npm run build",
+    "start": "npm run start:backend",
+    "start:backend": "cd Backend && npm start",
+    "start:web": "cd Web && npm start",
+    "db:migrate": "cd Backend && npm run migrate",
+    "db:seed": "cd Backend && npm run seed",
+    "db:setup": "npm run db:migrate && npm run db:seed",
+    "db:reset": "npm run db:drop && npm run db:create && npm run db:setup",
+    "db:create": "createdb nemi_ai_inbox || echo 'Database already exists'",
+    "db:drop": "dropdb nemi_ai_inbox || echo 'Database does not exist'",
+    "test": "npm run test:backend",
+    "test:backend": "cd Backend && npm test",
+    "lint": "npm run lint:backend",
+    "lint:backend": "cd Backend && npm run lint",
+    "clean": "npm run clean:backend && npm run clean:deps",
+    "clean:backend": "cd Backend && rm -rf dist node_modules",
+    "clean:deps": "rm -rf node_modules",
+    "setup": "npm run install:all && npm run db:create && npm run db:setup",
+    "logs": "tail -f Backend/logs/app.log",
+    "health": "curl -s http://localhost:3000/health | jq || curl http://localhost:3000/health"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.68.0",
+    "openai": "^6.7.0"
+  }
+}

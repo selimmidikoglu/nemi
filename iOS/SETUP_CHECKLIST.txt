@@ -1,0 +1,77 @@
+╔══════════════════════════════════════════════════════════════╗
+║                  XCODE PROJECT SETUP CHECKLIST              ║
+╚══════════════════════════════════════════════════════════════╝
+
+□ Step 1: Create New Project
+  □ Open Xcode
+  □ File → New → Project
+  □ Select: iOS → App → Next
+
+□ Step 2: Configure
+  □ Product Name: NemiAIInbox
+  □ Organization ID: com.nemi
+  □ Interface: SwiftUI
+  □ Language: Swift
+  □ Click Next
+
+□ Step 3: Save Location
+  □ Navigate to: /Users/gaban/Documents/NEMI/iOS
+  □ UNCHECK "Create Git repository"
+  □ Click Create
+
+□ Step 4: Delete Defaults
+  □ Delete ContentView.swift
+  □ Delete NemiAIInboxApp.swift (Xcode's version)
+
+□ Step 5: Add Our Files
+  □ Right-click project → Add Files to "NemiAIInbox"
+  □ Navigate to: /Users/gaban/Documents/NEMI/iOS/NemiAIInbox/
+  □ Hold Cmd and select:
+    □ Models folder
+    □ Views folder
+    □ ViewModels folder
+    □ Services folder
+    □ Utils folder
+    □ NemiAIInboxApp.swift file
+  □ Check "Copy items if needed"
+  □ Check "Create groups"
+  □ Check target: NemiAIInbox
+  □ Click Add
+
+□ Step 6: Select Simulator
+  □ Click device selector at top
+  □ Choose: iPhone 15 Pro
+
+□ Step 7: Build & Run
+  □ Press Cmd+R (or click Play ▶️)
+
+□ Step 8: Success!
+  □ Simulator launches
+  □ Login screen appears
+  □ Project ready! ✓
+
+═══════════════════════════════════════════════════════════════
+
+AFTER SETUP - Use These Commands:
+
+  make dev         → Start backend + iOS
+  make dev-ios     → Build and run iOS only
+  make dev-backend → Backend API only
+
+═══════════════════════════════════════════════════════════════
+
+TROUBLESHOOTING:
+
+Build fails?
+  → Check all files added with "Create groups"
+  → Verify files in Navigator aren't grayed out
+
+Can't find files?
+  → ls /Users/gaban/Documents/NEMI/iOS/NemiAIInbox/
+  → Should show: Models, Views, ViewModels, Services, Utils
+
+Simulator won't start?
+  → Xcode → Preferences → Locations
+  → Select Command Line Tools
+
+═══════════════════════════════════════════════════════════════
