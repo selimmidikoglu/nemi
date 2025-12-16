@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 import { Inbox } from 'lucide-react'
 import type { Email, EmailBadge } from '@/types'
 import { apiService } from '@/lib/api'
+import { useEmailStore } from '@/lib/store'
 
 // Helper to determine if a color is too dark for dark mode backgrounds
 function getContrastAdjustedColor(hexColor: string, isDark: boolean): string {
@@ -38,6 +39,8 @@ interface EmailFiltersProps {
   activeBadge: string | null
   onBadgeChange: (badgeName: string | null) => void
   totalEmailCount: number
+  refreshKey?: number // Increment this to trigger a refetch of badge stats
+  emailAccountId?: string | null // Filter badge stats by account
 }
 
 interface BadgeStats {
@@ -49,17 +52,28 @@ interface BadgeStats {
   displayOrder: number
 }
 
-export default function EmailFilters({ emails, activeBadge, onBadgeChange, totalEmailCount }: EmailFiltersProps) {
+export default function EmailFilters({ emails, activeBadge, onBadgeChange, totalEmailCount, refreshKey, emailAccountId }: EmailFiltersProps) {
   const [badgeStats, setBadgeStats] = useState<BadgeStats[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const { resolvedTheme } = useTheme()
   const isDark = resolvedTheme === 'dark'
 
-  // Fetch badge statistics from backend
+  // Get search badge stats from store (only populated during search)
+  const searchBadgeStats = useEmailStore((state) => state.searchBadgeStats)
+  const isSearchActive = searchBadgeStats !== null
+
+  // Fetch badge statistics from backend (only when not searching)
   useEffect(() => {
+    // Skip fetching when we have search results - use searchBadgeStats instead
+    if (isSearchActive) {
+      setIsLoading(false)
+      return
+    }
+
     const fetchBadgeStats = async () => {
       try {
-        const response = await apiService.getBadgeStats()
+        // Pass emailAccountId to filter badge stats by account
+        const response = await apiService.getBadgeStats(emailAccountId)
         setBadgeStats(response.badges || [])
       } catch (error) {
         console.error('Failed to fetch badge stats:', error)
@@ -69,14 +83,17 @@ export default function EmailFilters({ emails, activeBadge, onBadgeChange, total
     }
 
     fetchBadgeStats()
-  }, [])
+  }, [refreshKey, isSearchActive, emailAccountId]) // Re-fetch when refreshKey, search, or account changes
 
   // Generic/system badges that belong in sidebar, not filter bar
   const genericBadges = ['Automated', 'Promotional', 'Newsletter', 'Marketing', 'Spam', 'Shopping', 'Other']
 
+  // Use search badge stats when searching, otherwise use fetched badge stats
+  const activeBadgeStats = isSearchActive ? searchBadgeStats : badgeStats
+
   // Show meaningful badges (excluding generic ones)
   // Backend already handles sorting (by display_order if custom, or by count if default)
-  const filteredBadges = badgeStats
+  const filteredBadges = activeBadgeStats
     .filter(badge => badge.count > 0 && !genericBadges.includes(badge.name))
 
   return (
@@ -90,7 +107,7 @@ export default function EmailFilters({ emails, activeBadge, onBadgeChange, total
         scrollbarColor: 'hsl(var(--border)) transparent'
       }}
     >
-      {/* All badge */}
+      {/* All badge - clicking clears search if active */}
       <button
         className={cn(
           'flex items-center gap-1.5 px-2 py-1.5 text-xs font-medium transition-all hover:opacity-80 flex-shrink-0 relative h-full',

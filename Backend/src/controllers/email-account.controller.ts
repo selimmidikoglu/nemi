@@ -217,24 +217,42 @@ export class EmailAccountController {
 
   /**
    * DELETE /api/email-accounts/:id
-   * Delete an email account
+   * Delete an email account and all associated emails
    */
   deleteEmailAccount = async (req: Request, res: Response): Promise<void> => {
     try {
       const userId = (req as any).userId;
       const { id } = req.params;
 
-      const success = await this.userEmailAccountService.deleteEmailAccount(id, userId);
+      const result = await this.userEmailAccountService.deleteEmailAccount(id, userId);
 
-      if (!success) {
+      if (!result.deleted) {
         res.status(404).json({ error: 'Email account not found' });
         return;
       }
 
-      res.status(204).send();
+      console.log(`Deleted email account ${id} and ${result.emailsDeleted} associated emails`);
+      res.json({ message: 'Account deleted', emailsDeleted: result.emailsDeleted });
     } catch (error) {
       console.error('Delete email account error:', error);
       res.status(500).json({ error: 'Failed to delete email account' });
+    }
+  };
+
+  /**
+   * GET /api/email-accounts/sync-status
+   * Get sync status for all accounts (for initial sync indicator)
+   */
+  getSyncStatus = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = (req as any).userId;
+
+      const status = await this.userEmailAccountService.getSyncStatus(userId);
+
+      res.json(status);
+    } catch (error) {
+      console.error('Get sync status error:', error);
+      res.status(500).json({ error: 'Failed to get sync status' });
     }
   };
 

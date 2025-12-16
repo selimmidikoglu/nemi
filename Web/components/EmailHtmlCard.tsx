@@ -6,6 +6,8 @@ import { useTheme } from 'next-themes'
 interface EmailHtmlCardProps {
   htmlContent: string
   className?: string
+  onCardClick?: () => void  // Called when clicking non-interactive areas (to open email)
+  onLinkClick?: (url: string) => void  // Called when clicking links inside the card (for tracking)
 }
 
 // Light mode Tailwind color mappings
@@ -146,7 +148,7 @@ function convertTailwindToInline(html: string, isDark: boolean): string {
  * Automatically adapts colors for dark/light themes by replacing
  * hardcoded Tailwind classes with theme-appropriate equivalents.
  */
-export default function EmailHtmlCard({ htmlContent, className = '' }: EmailHtmlCardProps) {
+export default function EmailHtmlCard({ htmlContent, className = '', onCardClick, onLinkClick }: EmailHtmlCardProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const { resolvedTheme } = useTheme()
 
@@ -162,29 +164,60 @@ export default function EmailHtmlCard({ htmlContent, className = '' }: EmailHtml
     containerRef.current.innerHTML = `<div class="email-html-content">${processedHtml}</div>`
   }, [htmlContent, resolvedTheme])
 
-  const isDark = resolvedTheme === 'dark'
+  // Handle clicks on links/buttons inside the HTML content
+  useEffect(() => {
+    if (!containerRef.current) return
+
+    const handleClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement
+      const container = containerRef.current
+
+      // Find anchor or button, but only if it's INSIDE this container (not a parent)
+      const closestAnchor = target.closest('a')
+      const closestButton = target.closest('button')
+
+      // Check if the found element is inside our container (not a parent element)
+      const isAnchorInside = closestAnchor && container?.contains(closestAnchor)
+      const isButtonInside = closestButton && container?.contains(closestButton)
+
+      if (isAnchorInside || isButtonInside) {
+        // Stop propagation and prevent default only for interactive elements INSIDE the card
+        e.stopPropagation()
+        e.preventDefault()
+
+        // Handle link clicks in a safe way
+        if (isAnchorInside && closestAnchor) {
+          const href = closestAnchor.getAttribute('href')
+          if (href) {
+            // Track the link click if callback provided
+            onLinkClick?.(href)
+            window.open(href, '_blank', 'noopener,noreferrer')
+          }
+        }
+      } else {
+        // Clicking on non-interactive area - call onCardClick to open email
+        e.stopPropagation()
+        e.preventDefault()
+        onCardClick?.()
+      }
+    }
+
+    containerRef.current.addEventListener('click', handleClick)
+    return () => {
+      containerRef.current?.removeEventListener('click', handleClick)
+    }
+  }, [htmlContent, resolvedTheme, onCardClick, onLinkClick])
 
   return (
     <div
       ref={containerRef}
       className={`email-html-card ${className}`}
       style={{
-        // Simplified styling - no extra box in dark mode, subtle in light mode
-        backgroundColor: isDark ? 'transparent' : 'rgba(0, 0, 0, 0.02)',
-        padding: isDark ? '0' : '6px',
+        // Clean styling - no borders or backgrounds for cleaner list appearance
+        backgroundColor: 'transparent',
+        padding: '0',
         borderRadius: '6px',
-        border: isDark ? 'none' : '1px solid rgba(0, 0, 0, 0.05)',
-      }}
-      onClick={(e) => {
-        // Handle link clicks in a safe way
-        const target = e.target as HTMLElement
-        if (target.tagName === 'A') {
-          e.preventDefault()
-          const href = target.getAttribute('href')
-          if (href) {
-            window.open(href, '_blank', 'noopener,noreferrer')
-          }
-        }
+        border: 'none',
       }}
     />
   )

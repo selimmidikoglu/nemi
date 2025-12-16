@@ -39,7 +39,7 @@ export function LandingNav() {
           <Link href="/" className="flex items-center gap-2 group">
             <div className="relative w-10 h-10 transition-transform group-hover:scale-110">
               <Image
-                src="/main-logo.png"
+                src="/Nemi-logo.png"
                 alt="NEMI"
                 fill
                 className="object-contain"

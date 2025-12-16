@@ -247,3 +247,104 @@
 html {
   scroll-behavior: smooth;
 }
+
+/* Email HTML content styling - preserve original email formatting */
+.email-html-content {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  line-height: 1.6;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+.email-html-content p {
+  margin-bottom: 1em;
+}
+
+.email-html-content ul,
+.email-html-content ol {
+  margin: 1em 0;
+  padding-left: 2em;
+}
+
+.email-html-content li {
+  margin-bottom: 0.5em;
+}
+
+.email-html-content ul li {
+  list-style-type: disc;
+}
+
+.email-html-content ol li {
+  list-style-type: decimal;
+}
+
+.email-html-content a {
+  color: #2563eb;
+  text-decoration: underline;
+}
+
+.email-html-content a:hover {
+  color: #1d4ed8;
+}
+
+.dark .email-html-content a {
+  color: #60a5fa;
+}
+
+.dark .email-html-content a:hover {
+  color: #93c5fd;
+}
+
+.email-html-content br {
+  display: block;
+  content: "";
+  margin-top: 0.5em;
+}
+
+.email-html-content h1,
+.email-html-content h2,
+.email-html-content h3,
+.email-html-content h4,
+.email-html-content h5,
+.email-html-content h6 {
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+  font-weight: 600;
+}
+
+.email-html-content blockquote {
+  border-left: 3px solid #d1d5db;
+  padding-left: 1em;
+  margin: 1em 0;
+  color: #6b7280;
+}
+
+.dark .email-html-content blockquote {
+  border-left-color: #4b5563;
+  color: #9ca3af;
+}
+
+.email-html-content table {
+  border-collapse: collapse;
+  margin: 1em 0;
+}
+
+.email-html-content td,
+.email-html-content th {
+  padding: 0.5em;
+}
+
+.email-html-content img {
+  max-width: 100%;
+  height: auto;
+}
+
+.email-html-content hr {
+  border: none;
+  border-top: 1px solid #e5e7eb;
+  margin: 1.5em 0;
+}
+
+.dark .email-html-content hr {
+  border-top-color: #374151;
+}

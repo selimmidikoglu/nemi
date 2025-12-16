@@ -1,5 +1,6 @@
 import { query, getClient } from '../config/database';
 import { logger } from '../config/logger';
+import { unsubscribeService } from './unsubscribe.service';
 
 interface EngagementEvent {
   userId: string;
@@ -106,6 +107,29 @@ export class EngagementService {
       await client.query('COMMIT');
 
       logger.info(`Saved view session ${session.sessionId}, duration: ${session.durationSeconds}s`);
+
+      // Update sender engagement metrics asynchronously (after commit)
+      // Get the sender email from the email record
+      try {
+        const emailResult = await query(
+          `SELECT from_email FROM emails WHERE id = $1`,
+          [session.emailId]
+        );
+
+        if (emailResult.rows.length > 0 && emailResult.rows[0].from_email) {
+          const senderEmail = emailResult.rows[0].from_email;
+          // Record the email open for sender metrics
+          await unsubscribeService.recordEmailOpen(
+            session.userId,
+            senderEmail,
+            session.durationSeconds
+          );
+          logger.debug(`Updated sender metrics for ${senderEmail}`);
+        }
+      } catch (senderError) {
+        // Don't fail the view session save if sender metrics update fails
+        logger.error('Error updating sender metrics:', senderError);
+      }
     } catch (error) {
       await client.query('ROLLBACK');
       logger.error('Error saving view session:', error);
@@ -323,10 +347,10 @@ export class EngagementService {
     range: '7d' | '30d' | '90d' | 'all'
   ): Promise<any | null> {
     try {
-      // Calculate date threshold based on range
+      // Calculate date threshold and days based on range
       let dateThreshold: string | null = null;
+      const days = range === '7d' ? 7 : range === '30d' ? 30 : range === '90d' ? 90 : 365;
       if (range !== 'all') {
-        const days = range === '7d' ? 7 : range === '30d' ? 30 : 90;
         dateThreshold = `NOW() - INTERVAL '${days} days'`;
       }
 
@@ -353,27 +377,27 @@ export class EngagementService {
             MAX(evs.opened_at) as last_interaction_at
            FROM user_badge_definitions ubd
            LEFT JOIN email_badges eb ON eb.badge_name = ubd.badge_name
-           LEFT JOIN emails e ON e.id = eb.email_id AND e.user_id = ubd.user_id AND e.received_at >= ${dateThreshold}
+           LEFT JOIN emails e ON e.id = eb.email_id AND e.user_id = ubd.user_id AND e.date >= ${dateThreshold}
            LEFT JOIN email_view_sessions evs ON evs.email_id = e.id AND evs.user_id = e.user_id
            WHERE ubd.user_id = $1 AND ubd.badge_name = $2
            GROUP BY ubd.badge_name, ubd.badge_color, ubd.category`
         : `SELECT
-            bem.badge_name,
+            ubd.badge_name,
             ubd.badge_color,
             ubd.category,
-            bem.total_emails_with_badge,
-            bem.emails_opened,
-            bem.emails_with_clicks,
-            bem.total_time_spent_seconds,
-            bem.avg_time_spent_seconds,
-            bem.total_link_clicks,
-            bem.open_rate,
-            bem.click_rate,
+            COALESCE(bem.total_emails_with_badge, ubd.usage_count, 0) as total_emails_with_badge,
+            COALESCE(bem.emails_opened, 0) as emails_opened,
+            COALESCE(bem.emails_with_clicks, 0) as emails_with_clicks,
+            COALESCE(bem.total_time_spent_seconds, 0) as total_time_spent_seconds,
+            COALESCE(bem.avg_time_spent_seconds, 0) as avg_time_spent_seconds,
+            COALESCE(bem.total_link_clicks, 0) as total_link_clicks,
+            COALESCE(bem.open_rate, 0) as open_rate,
+            COALESCE(bem.click_rate, 0) as click_rate,
             bem.last_interaction_at
-           FROM badge_engagement_metrics bem
-           JOIN user_badge_definitions ubd
-             ON ubd.user_id = bem.user_id AND ubd.badge_name = bem.badge_name
-           WHERE bem.user_id = $1 AND bem.badge_name = $2`;
+           FROM user_badge_definitions ubd
+           LEFT JOIN badge_engagement_metrics bem
+             ON bem.user_id = ubd.user_id AND bem.badge_name = ubd.badge_name
+           WHERE ubd.user_id = $1 AND ubd.badge_name = $2`;
 
       const result = await query(metricsQuery, [userId, badgeName]);
 
@@ -389,6 +413,49 @@ export class EngagementService {
          metrics.click_rate * 0.3 +
          Math.min(metrics.avg_time_spent_seconds / 300, 1) * 0.3);
 
+      // Get timeline data for the date range
+      const timelineQuery = `
+        WITH date_series AS (
+          SELECT
+            date::DATE as activity_date
+          FROM generate_series(
+            CURRENT_DATE - INTERVAL '${days - 1} days',
+            CURRENT_DATE,
+            '1 day'::INTERVAL
+          ) AS date
+        ),
+        badge_emails AS (
+          SELECT DISTINCT e.id as email_id, e.date::DATE as received_date
+          FROM emails e
+          JOIN email_badges eb ON eb.email_id = e.id
+          WHERE e.user_id = $1
+            AND eb.badge_name = $2
+            AND e.date >= CURRENT_DATE - INTERVAL '${days - 1} days'
+        ),
+        daily_sessions AS (
+          SELECT
+            DATE(evs.opened_at) as session_date,
+            COUNT(DISTINCT evs.email_id) as emails_opened,
+            COALESCE(SUM(evs.duration_seconds), 0) as time_spent
+          FROM email_view_sessions evs
+          JOIN email_badges eb ON eb.email_id = evs.email_id
+          WHERE evs.user_id = $1
+            AND eb.badge_name = $2
+            AND evs.opened_at >= CURRENT_DATE - INTERVAL '${days - 1} days'
+          GROUP BY DATE(evs.opened_at)
+        )
+        SELECT
+          ds.activity_date::TEXT as date,
+          COALESCE((SELECT COUNT(*) FROM badge_emails WHERE received_date = ds.activity_date), 0) as emails,
+          COALESCE(dss.emails_opened, 0) as opened,
+          COALESCE(dss.time_spent, 0) as time_spent
+        FROM date_series ds
+        LEFT JOIN daily_sessions dss ON dss.session_date = ds.activity_date
+        ORDER BY ds.activity_date
+      `;
+
+      const timelineResult = await query(timelineQuery, [userId, badgeName]);
+
       return {
         badge_name: metrics.badge_name,
         badge_color: metrics.badge_color,
@@ -402,7 +469,13 @@ export class EngagementService {
         open_rate: parseFloat(metrics.open_rate),
         click_rate: parseFloat(metrics.click_rate),
         engagement_score: parseFloat(engagement_score.toFixed(2)),
-        last_interaction_at: metrics.last_interaction_at
+        last_interaction_at: metrics.last_interaction_at,
+        timeline: timelineResult.rows.map(row => ({
+          date: row.date,
+          emails: parseInt(row.emails),
+          opened: parseInt(row.opened),
+          timeSpent: parseInt(row.time_spent)
+        }))
       };
     } catch (error) {
       logger.error('Error getting badge analytics:', error);
@@ -415,6 +488,24 @@ export class EngagementService {
    */
   async getAnalyticsOverview(userId: string): Promise<any> {
     try {
+      // Get total unique email count (not double-counted across badges)
+      const uniqueEmailCountResult = await query(
+        `SELECT COUNT(DISTINCT id) as total_unique_emails
+         FROM emails
+         WHERE user_id = $1 AND is_deleted = false`,
+        [userId]
+      );
+      const totalUniqueEmails = parseInt(uniqueEmailCountResult.rows[0]?.total_unique_emails) || 0;
+
+      // Get total unique time spent (sum of all view sessions, not per-badge which can double count)
+      const uniqueTimeResult = await query(
+        `SELECT COALESCE(SUM(duration_seconds), 0) as total_time_seconds
+         FROM email_view_sessions
+         WHERE user_id = $1`,
+        [userId]
+      );
+      const totalUniqueTimeSeconds = parseInt(uniqueTimeResult.rows[0]?.total_time_seconds) || 0;
+
       // Get all badges with their metrics (using badge definitions as primary source)
       // Left join with engagement metrics so we show all badges even without engagement data
       const badgesResult = await query(
@@ -468,6 +559,8 @@ export class EngagementService {
       );
 
       return {
+        totalUniqueEmails,
+        totalUniqueTimeSeconds,
         badges: badgesResult.rows.map(row => ({
           name: row.badge_name,
           color: row.badge_color,

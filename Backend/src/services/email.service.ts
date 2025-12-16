@@ -47,7 +47,8 @@ export class EmailService {
       accessToken: account.access_token,
       refreshToken: account.refresh_token,
       clientId: process.env.GMAIL_CLIENT_ID || '',
-      clientSecret: process.env.GMAIL_CLIENT_SECRET || ''
+      clientSecret: process.env.GMAIL_CLIENT_SECRET || '',
+      accountId: account.id
     });
 
     const maxEmails = parseInt(process.env.MAX_INITIAL_EMAILS || '100', 10);
@@ -65,7 +66,10 @@ export class EmailService {
       body: email.body || email.textBody,
       htmlBody: email.htmlBody,
       snippet: email.body?.substring(0, 200) || '',
-      hasAttachments: email.hasAttachments || false
+      hasAttachments: email.hasAttachments || false,
+      // Unsubscribe info from List-Unsubscribe header
+      unsubscribeUrl: email.unsubscribeUrl || null,
+      unsubscribeEmail: email.unsubscribeEmail || null
     }));
   }
 
@@ -87,9 +91,10 @@ export class EmailService {
             snippet, date, is_read, is_starred, has_attachments,
             ai_summary, category, importance, is_personally_relevant,
             company_name, company_domain, company_logo_url,
-            is_answerable, suggested_replies
+            is_answerable, suggested_replies,
+            unsubscribe_url, unsubscribe_email
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
           ON CONFLICT (user_id, provider_email_id) DO UPDATE SET
             ai_summary = EXCLUDED.ai_summary,
             category = EXCLUDED.category,
@@ -99,7 +104,9 @@ export class EmailService {
             company_domain = EXCLUDED.company_domain,
             company_logo_url = EXCLUDED.company_logo_url,
             is_answerable = EXCLUDED.is_answerable,
-            suggested_replies = EXCLUDED.suggested_replies
+            suggested_replies = EXCLUDED.suggested_replies,
+            unsubscribe_url = COALESCE(EXCLUDED.unsubscribe_url, emails.unsubscribe_url),
+            unsubscribe_email = COALESCE(EXCLUDED.unsubscribe_email, emails.unsubscribe_email)
           RETURNING id`,
           [
             userId,
@@ -126,7 +133,9 @@ export class EmailService {
             email.companyDomain,
             email.companyLogoUrl,
             email.isAnswerable,
-            email.suggestedReplies ? JSON.stringify(email.suggestedReplies) : null
+            email.suggestedReplies ? JSON.stringify(email.suggestedReplies) : null,
+            email.unsubscribeUrl || null,
+            email.unsubscribeEmail || null
           ]
         );
 
@@ -162,6 +171,14 @@ export class EmailService {
     const conditions: string[] = ['e.user_id = $1'];
     const params: any[] = [filters.userId];
     let paramIndex = 2;
+
+    // By default, exclude deleted and archived emails unless specifically requested
+    if (!filters.includeDeleted) {
+      conditions.push(`COALESCE(e.is_deleted, false) = false`);
+    }
+    if (!filters.includeArchived) {
+      conditions.push(`COALESCE(e.is_archived, false) = false`);
+    }
 
     if (filters.category) {
       conditions.push(`e.category = $${paramIndex++}`);
@@ -207,6 +224,11 @@ export class EmailService {
       paramIndex++;
     }
 
+    if (filters.emailAccountId) {
+      conditions.push(`e.email_account_id = $${paramIndex++}`);
+      params.push(filters.emailAccountId);
+    }
+
     const whereClause = conditions.join(' AND ');
 
     const result = await query(
@@ -224,6 +246,15 @@ export class EmailService {
     const conditions: string[] = ['e.user_id = $1'];
     const params: any[] = [filters.userId];
     let paramIndex = 2;
+
+    // By default, exclude deleted and archived emails unless specifically requested
+    // Note: is_deleted and is_archived columns may be null for older emails, treat null as false
+    if (!filters.includeDeleted) {
+      conditions.push(`COALESCE(e.is_deleted, false) = false`);
+    }
+    if (!filters.includeArchived) {
+      conditions.push(`COALESCE(e.is_archived, false) = false`);
+    }
 
     if (filters.category) {
       conditions.push(`e.category = $${paramIndex++}`);
@@ -269,6 +300,11 @@ export class EmailService {
       )`);
       params.push(filters.badgeName);
       paramIndex++;
+    }
+
+    if (filters.emailAccountId) {
+      conditions.push(`e.email_account_id = $${paramIndex++}`);
+      params.push(filters.emailAccountId);
     }
 
     const whereClause = conditions.join(' AND ');
@@ -497,7 +533,8 @@ export class EmailService {
         accessToken: account.access_token,
         refreshToken: account.refresh_token,
         clientId: process.env.GMAIL_CLIENT_ID || '',
-        clientSecret: process.env.GMAIL_CLIENT_SECRET || ''
+        clientSecret: process.env.GMAIL_CLIENT_SECRET || '',
+        accountId: account.id
       });
 
       try {
@@ -606,13 +643,21 @@ export class EmailService {
   /**
    * Get category statistics
    */
-  async getCategoryStats(userId: string): Promise<any> {
+  async getCategoryStats(userId: string, emailAccountId?: string): Promise<any> {
+    const conditions = ['user_id = $1'];
+    const params: any[] = [userId];
+
+    if (emailAccountId) {
+      conditions.push('email_account_id = $2');
+      params.push(emailAccountId);
+    }
+
     const result = await query(
       `SELECT category, COUNT(*) as count
        FROM emails
-       WHERE user_id = $1
+       WHERE ${conditions.join(' AND ')}
        GROUP BY category`,
-      [userId]
+      params
     );
 
     return result.rows;
@@ -704,7 +749,10 @@ export class EmailService {
       renderAsHtml: row.render_as_html || false,
       // NEW: AI-powered reply assistance
       isAnswerable: row.is_answerable || false,
-      suggestedReplies: parseJsonField(row.suggested_replies, null)
+      suggestedReplies: parseJsonField(row.suggested_replies, null),
+      // Snooze and Archive features
+      snoozedUntil: row.snoozed_until || null,
+      isArchived: row.is_archived || false
     };
   }
 
@@ -712,7 +760,7 @@ export class EmailService {
    * Get badge statistics with usage counts
    * Includes display_order and hasCustomOrder flag for proper ordering
    */
-  async getBadgeStats(userId: string, category?: string): Promise<any> {
+  async getBadgeStats(userId: string, category?: string, emailAccountId?: string): Promise<any> {
     // Get custom order flag from users table
     const flagResult = await query(
       `SELECT COALESCE(has_custom_badge_order, false) as has_custom_order FROM users WHERE id = $1`,
@@ -737,10 +785,19 @@ export class EmailService {
     `;
 
     const params: any[] = [userId];
+    let paramIndex = 2;
+
+    // Filter by email account if specified
+    if (emailAccountId) {
+      queryText += ` AND e.email_account_id = $${paramIndex}`;
+      params.push(emailAccountId);
+      paramIndex++;
+    }
 
     if (category) {
-      queryText += ` AND ubd.category = $2`;
+      queryText += ` AND ubd.category = $${paramIndex}`;
       params.push(category);
+      paramIndex++;
     }
 
     queryText += ` GROUP BY ubd.badge_name, ubd.badge_color, ubd.badge_icon, ubd.category, ubd.display_order, ubd.last_used_at`;
@@ -814,5 +871,260 @@ export class EmailService {
       total: parseInt(result.rows[0].total),
       analyzed: parseInt(result.rows[0].analyzed)
     };
+  }
+
+  /**
+   * Snooze an email until a specific time
+   */
+  async snoozeEmail(emailId: string, userId: string, snoozeUntil: Date): Promise<void> {
+    await query(
+      `UPDATE emails SET snoozed_until = $1 WHERE id = $2 AND user_id = $3`,
+      [snoozeUntil, emailId, userId]
+    );
+    logger.info(`Snoozed email ${emailId} until ${snoozeUntil.toISOString()}`);
+  }
+
+  /**
+   * Unsnooze an email (remove snooze time)
+   */
+  async unsnoozeEmail(emailId: string, userId: string): Promise<void> {
+    await query(
+      `UPDATE emails SET snoozed_until = NULL WHERE id = $1 AND user_id = $2`,
+      [emailId, userId]
+    );
+    logger.info(`Unsnoozed email ${emailId}`);
+  }
+
+  /**
+   * Get snoozed emails that should be unsnoozed (snooze time has passed)
+   */
+  async getExpiredSnoozes(userId: string): Promise<any[]> {
+    const result = await query(
+      `SELECT * FROM emails
+       WHERE user_id = $1
+         AND snoozed_until IS NOT NULL
+         AND snoozed_until <= NOW()`,
+      [userId]
+    );
+    return result.rows.map(this.formatEmail);
+  }
+
+  /**
+   * Get all currently snoozed emails
+   */
+  async getSnoozedEmails(userId: string): Promise<any[]> {
+    const result = await query(
+      `SELECT * FROM emails
+       WHERE user_id = $1
+         AND snoozed_until IS NOT NULL
+         AND snoozed_until > NOW()
+       ORDER BY snoozed_until ASC`,
+      [userId]
+    );
+    return result.rows.map(this.formatEmail);
+  }
+
+  /**
+   * Archive an email
+   */
+  async archiveEmail(emailId: string, userId: string): Promise<void> {
+    await query(
+      `UPDATE emails SET is_archived = TRUE WHERE id = $1 AND user_id = $2`,
+      [emailId, userId]
+    );
+    logger.info(`Archived email ${emailId}`);
+
+    // Sync archive status to provider (Gmail uses a label system)
+    try {
+      await this.syncArchiveStatusToProvider(emailId, userId, true);
+    } catch (error) {
+      logger.error(`Failed to sync archive status to provider for email ${emailId}:`, error);
+    }
+  }
+
+  /**
+   * Unarchive an email
+   */
+  async unarchiveEmail(emailId: string, userId: string): Promise<void> {
+    await query(
+      `UPDATE emails SET is_archived = FALSE WHERE id = $1 AND user_id = $2`,
+      [emailId, userId]
+    );
+    logger.info(`Unarchived email ${emailId}`);
+
+    try {
+      await this.syncArchiveStatusToProvider(emailId, userId, false);
+    } catch (error) {
+      logger.error(`Failed to sync unarchive status to provider for email ${emailId}:`, error);
+    }
+  }
+
+  /**
+   * Get archived emails
+   */
+  async getArchivedEmails(userId: string, limit: number = 50, offset: number = 0): Promise<any[]> {
+    const result = await query(
+      `SELECT * FROM emails
+       WHERE user_id = $1 AND is_archived = TRUE
+       ORDER BY date DESC
+       LIMIT $2 OFFSET $3`,
+      [userId, limit, offset]
+    );
+    return result.rows.map(this.formatEmail);
+  }
+
+  /**
+   * Bulk archive emails
+   */
+  async bulkArchiveEmails(emailIds: string[], userId: string): Promise<number> {
+    const result = await query(
+      `UPDATE emails SET is_archived = TRUE
+       WHERE id = ANY($1) AND user_id = $2`,
+      [emailIds, userId]
+    );
+
+    // Sync to provider for each email
+    for (const emailId of emailIds) {
+      try {
+        await this.syncArchiveStatusToProvider(emailId, userId, true);
+      } catch (error) {
+        logger.error(`Failed to sync archive to provider for email ${emailId}:`, error);
+      }
+    }
+
+    return result.rowCount || 0;
+  }
+
+  /**
+   * Soft delete email (move to trash)
+   */
+  async trashEmail(emailId: string, userId: string): Promise<void> {
+    await query(
+      `UPDATE emails SET is_deleted = TRUE, deleted_at = NOW() WHERE id = $1 AND user_id = $2`,
+      [emailId, userId]
+    );
+    logger.info(`Moved email ${emailId} to trash`);
+
+    // Optionally sync to provider (Gmail has a trash function)
+    try {
+      await this.syncTrashStatusToProvider(emailId, userId, true);
+    } catch (error) {
+      logger.error(`Failed to sync trash status to provider for email ${emailId}:`, error);
+    }
+  }
+
+  /**
+   * Restore email from trash
+   */
+  async restoreEmail(emailId: string, userId: string): Promise<void> {
+    await query(
+      `UPDATE emails SET is_deleted = FALSE, deleted_at = NULL WHERE id = $1 AND user_id = $2`,
+      [emailId, userId]
+    );
+    logger.info(`Restored email ${emailId} from trash`);
+
+    try {
+      await this.syncTrashStatusToProvider(emailId, userId, false);
+    } catch (error) {
+      logger.error(`Failed to sync restore status to provider for email ${emailId}:`, error);
+    }
+  }
+
+  /**
+   * Get deleted/trashed emails
+   */
+  async getDeletedEmails(userId: string, limit: number = 50, offset: number = 0): Promise<any[]> {
+    const result = await query(
+      `SELECT * FROM emails
+       WHERE user_id = $1 AND is_deleted = TRUE
+       ORDER BY deleted_at DESC
+       LIMIT $2 OFFSET $3`,
+      [userId, limit, offset]
+    );
+    return result.rows.map(this.formatEmail);
+  }
+
+  /**
+   * Sync trash status to email provider
+   */
+  private async syncTrashStatusToProvider(emailId: string, userId: string, isTrashed: boolean): Promise<void> {
+    const result = await query(
+      `SELECT e.message_id, e.provider_type, e.email_account_id,
+              ea.access_token, ea.refresh_token
+       FROM emails e
+       LEFT JOIN email_accounts ea ON e.email_account_id = ea.id
+       WHERE e.id = $1 AND e.user_id = $2`,
+      [emailId, userId]
+    );
+
+    if (result.rows.length === 0) return;
+
+    const email = result.rows[0];
+
+    if (email.provider_type === 'gmail' && email.access_token) {
+      const { GmailService } = await import('./gmail.service');
+      const gmailService = new GmailService({
+        accessToken: email.access_token,
+        refreshToken: email.refresh_token,
+        clientId: process.env.GMAIL_CLIENT_ID || '',
+        clientSecret: process.env.GMAIL_CLIENT_SECRET || '',
+        accountId: email.email_account_id
+      });
+
+      try {
+        if (isTrashed) {
+          await gmailService.trashEmail(email.message_id);
+        } else {
+          await gmailService.untrashEmail(email.message_id);
+        }
+        logger.info(`Synced trash status to Gmail for email ${emailId}`);
+      } catch (error) {
+        logger.error(`Gmail trash sync failed for email ${emailId}:`, error);
+        throw error;
+      }
+    }
+  }
+
+  /**
+   * Sync archive status to email provider (Gmail removes INBOX label for archive)
+   */
+  private async syncArchiveStatusToProvider(emailId: string, userId: string, isArchived: boolean): Promise<void> {
+    const result = await query(
+      `SELECT e.message_id, e.provider_type, e.email_account_id,
+              ea.access_token, ea.refresh_token
+       FROM emails e
+       LEFT JOIN email_accounts ea ON e.email_account_id = ea.id
+       WHERE e.id = $1 AND e.user_id = $2`,
+      [emailId, userId]
+    );
+
+    if (result.rows.length === 0) return;
+
+    const email = result.rows[0];
+
+    if (email.provider_type === 'gmail' && email.access_token) {
+      const { GmailService } = await import('./gmail.service');
+      const gmailService = new GmailService({
+        accessToken: email.access_token,
+        refreshToken: email.refresh_token,
+        clientId: process.env.GMAIL_CLIENT_ID || '',
+        clientSecret: process.env.GMAIL_CLIENT_SECRET || '',
+        accountId: email.email_account_id
+      });
+
+      try {
+        if (isArchived) {
+          // Gmail archive = remove INBOX label
+          await gmailService.removeLabel(email.message_id, 'INBOX');
+        } else {
+          // Unarchive = add INBOX label back
+          await gmailService.addLabel(email.message_id, 'INBOX');
+        }
+        logger.info(`Synced archive status to Gmail for email ${emailId}`);
+      } catch (error) {
+        logger.error(`Gmail archive sync failed for email ${emailId}:`, error);
+        throw error;
+      }
+    }
   }
 }

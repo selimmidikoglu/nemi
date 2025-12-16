@@ -11,6 +11,7 @@ export interface User {
   lastLoginAt: Date | null;
   emailProvider: string;
   emailProviderConnected: boolean;
+  emailVerified: boolean;
 }
 
 export class AuthService {
@@ -28,7 +29,8 @@ export class AuthService {
        RETURNING id, email, display_name as "displayName", photo_url as "photoUrl",
                  created_at as "createdAt", last_login_at as "lastLoginAt",
                  email_provider as "emailProvider",
-                 email_provider_connected as "emailProviderConnected"`,
+                 email_provider_connected as "emailProviderConnected",
+                 email_verified as "emailVerified"`,
       [data.email, data.password, data.displayName]
     );
 
@@ -43,7 +45,8 @@ export class AuthService {
       `SELECT id, email, password, display_name as "displayName",
               photo_url as "photoUrl", created_at as "createdAt",
               last_login_at as "lastLoginAt", email_provider as "emailProvider",
-              email_provider_connected as "emailProviderConnected"
+              email_provider_connected as "emailProviderConnected",
+              email_verified as "emailVerified"
        FROM users
        WHERE email = $1`,
       [email]
@@ -60,7 +63,8 @@ export class AuthService {
       `SELECT id, email, password, display_name as "displayName",
               photo_url as "photoUrl", created_at as "createdAt",
               last_login_at as "lastLoginAt", email_provider as "emailProvider",
-              email_provider_connected as "emailProviderConnected"
+              email_provider_connected as "emailProviderConnected",
+              email_verified as "emailVerified"
        FROM users
        WHERE id = $1`,
       [id]

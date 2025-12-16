@@ -9,9 +9,9 @@ export const metadata: Metadata = {
   title: 'NEMI - AI Email Management',
   description: 'Intelligent email client powered by AI',
   icons: {
-    icon: '/main-logo.png',
-    shortcut: '/main-logo.png',
-    apple: '/main-logo.png',
+    icon: '/Nemi-logo.png',
+    shortcut: '/Nemi-logo.png',
+    apple: '/Nemi-logo.png',
   },
 }
 

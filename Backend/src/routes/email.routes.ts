@@ -48,9 +48,77 @@ router.get(
  */
 router.get('/analysis-progress', emailController.getAnalysisProgress);
 
+// ============================================
+// SNOOZE ROUTES (must be before /:id)
+// ============================================
+
+/**
+ * GET /api/emails/snoozed
+ * Get all currently snoozed emails
+ */
+router.get('/snoozed', emailController.getSnoozedEmails);
+
+// ============================================
+// ARCHIVE ROUTES (must be before /:id)
+// ============================================
+
+/**
+ * GET /api/emails/archived
+ * Get archived emails
+ */
+router.get(
+  '/archived',
+  [
+    query('limit').optional().isInt({ min: 1, max: 100 }).toInt(),
+    query('offset').optional().isInt({ min: 0 }).toInt(),
+    validateRequest
+  ],
+  emailController.getArchivedEmails
+);
+
+/**
+ * GET /api/emails/deleted
+ * Get deleted/trashed emails
+ */
+router.get(
+  '/deleted',
+  [
+    query('limit').optional().isInt({ min: 1, max: 100 }).toInt(),
+    query('offset').optional().isInt({ min: 0 }).toInt(),
+    validateRequest
+  ],
+  emailController.getDeletedEmails
+);
+
+/**
+ * GET /api/emails/categories/stats
+ * Get email count by category
+ */
+router.get('/categories/stats', emailController.getCategoryStats);
+
+/**
+ * GET /api/emails/badges/stats
+ * Get badge statistics with usage counts
+ * Query params: category (optional) - filter by badge category
+ */
+router.get(
+  '/badges/stats',
+  [
+    query('category').optional().isString(),
+    validateRequest
+  ],
+  emailController.getBadgeStats
+);
+
+/**
+ * GET /api/emails/badges/categories/stats
+ * Get badge category statistics with email counts per category
+ */
+router.get('/badges/categories/stats', emailController.getBadgeCategoryStats);
+
 /**
  * GET /api/emails/:id
- * Get single email by ID
+ * Get single email by ID (MUST be after all static routes)
  */
 router.get('/:id', emailController.getEmailById);
 
@@ -133,37 +201,11 @@ router.post(
     body('text').optional().isString(),
     body('html').optional().isString(),
     body('inReplyTo').optional().isString(),
-    body('emailAccountId').isInt(),
+    body('emailAccountId').isUUID(),
     validateRequest
   ],
   emailController.sendEmail
 );
-
-/**
- * GET /api/emails/categories/stats
- * Get email count by category
- */
-router.get('/categories/stats', emailController.getCategoryStats);
-
-/**
- * GET /api/emails/badges/stats
- * Get badge statistics with usage counts
- * Query params: category (optional) - filter by badge category
- */
-router.get(
-  '/badges/stats',
-  [
-    query('category').optional().isString(),
-    validateRequest
-  ],
-  emailController.getBadgeStats
-);
-
-/**
- * GET /api/emails/badges/categories/stats
- * Get badge category statistics with email counts per category
- */
-router.get('/badges/categories/stats', emailController.getBadgeCategoryStats);
 
 /**
  * POST /api/emails/autocomplete
@@ -182,5 +224,61 @@ router.post(
   ],
   emailController.getAutocompleteSuggestion
 );
+
+/**
+ * PATCH /api/emails/:id/snooze
+ * Snooze an email until a specific time
+ */
+router.patch(
+  '/:id/snooze',
+  [
+    body('snoozeUntil').isISO8601(),
+    validateRequest
+  ],
+  emailController.snoozeEmail
+);
+
+/**
+ * DELETE /api/emails/:id/snooze
+ * Unsnooze an email (remove snooze time)
+ */
+router.delete('/:id/snooze', emailController.unsnoozeEmail);
+
+/**
+ * POST /api/emails/:id/archive
+ * Archive an email
+ */
+router.post('/:id/archive', emailController.archiveEmail);
+
+/**
+ * DELETE /api/emails/:id/archive
+ * Unarchive an email
+ */
+router.delete('/:id/archive', emailController.unarchiveEmail);
+
+/**
+ * POST /api/emails/bulk-archive
+ * Bulk archive emails
+ */
+router.post(
+  '/bulk-archive',
+  [
+    body('emailIds').isArray().notEmpty(),
+    validateRequest
+  ],
+  emailController.bulkArchiveEmails
+);
+
+/**
+ * POST /api/emails/:id/trash
+ * Move email to trash (soft delete)
+ */
+router.post('/:id/trash', emailController.trashEmail);
+
+/**
+ * DELETE /api/emails/:id/trash
+ * Restore email from trash
+ */
+router.delete('/:id/trash', emailController.restoreEmail);
 
 export default router;

@@ -31,6 +31,16 @@ interface EmailScores {
 }
 
 /**
+ * Unsubscribe info extracted by AI
+ */
+interface UnsubscribeInfo {
+  has_option: boolean;
+  method: 'url' | 'email' | 'javascript' | 'none';
+  url: string | null;
+  email: string | null;
+}
+
+/**
  * Metadata structure returned by AI
  */
 interface EmailMetadata {
@@ -52,6 +62,7 @@ interface EmailMetadata {
   sender_type: string;
   html_snippet: string | null;
   render_as_html: boolean;
+  unsubscribe?: UnsubscribeInfo;
 }
 
 /**
@@ -572,6 +583,30 @@ Return JSON with this structure:
   }
 
   /**
+   * Update sender engagement metrics with unsubscribe info extracted by AI
+   */
+  private async updateSenderUnsubscribeInfo(
+    senderEmail: string,
+    unsubscribeUrl: string | null,
+    unsubscribeEmail: string | null
+  ): Promise<void> {
+    try {
+      await this.pool.query(
+        `UPDATE sender_engagement_metrics
+         SET unsubscribe_url = COALESCE($1, unsubscribe_url),
+             unsubscribe_email = COALESCE($2, unsubscribe_email),
+             has_unsubscribe_option = TRUE,
+             updated_at = NOW()
+         WHERE LOWER(sender_email) = LOWER($3)`,
+        [unsubscribeUrl, unsubscribeEmail, senderEmail]
+      );
+      logger.info(`Updated sender unsubscribe info for ${senderEmail}: url=${unsubscribeUrl}, email=${unsubscribeEmail}`);
+    } catch (error) {
+      logger.error(`Failed to update sender unsubscribe info for ${senderEmail}:`, error);
+    }
+  }
+
+  /**
    * Main method: Analyze a single email
    */
   async analyzeEmail(email: EmailForAnalysis, userId: string): Promise<AIAnalysisResponse | null> {
@@ -624,6 +659,11 @@ Return JSON with this structure:
         '$11 (render_as_html)': analysis.render_as_html || false
       });
 
+      // Extract unsubscribe info from AI response
+      const unsubInfo = analysis.metadata?.unsubscribe;
+      const unsubscribeUrl = unsubInfo?.url || null;
+      const unsubscribeEmail = unsubInfo?.email || null;
+
       // Save everything to database
       await Promise.all([
         this.saveBadges(email.id, analysis.badges),
@@ -641,7 +681,9 @@ Return JSON with this structure:
                is_about_me = $8,
                mention_context = $9,
                html_snippet = $10,
-               render_as_html = $11
+               render_as_html = $11,
+               unsubscribe_url = COALESCE($13, unsubscribe_url),
+               unsubscribe_email = COALESCE($14, unsubscribe_email)
            WHERE id = $12`,
           [
             analysis.summary,
@@ -655,9 +697,13 @@ Return JSON with this structure:
             analysis.mention_context || null,
             analysis.html_snippet || null,
             analysis.render_as_html || false,
-            email.id
+            email.id,
+            unsubscribeUrl,
+            unsubscribeEmail
           ]
-        )
+        ),
+        // Also update sender engagement metrics if we found unsubscribe info
+        unsubInfo?.has_option ? this.updateSenderUnsubscribeInfo(email.from_email, unsubscribeUrl, unsubscribeEmail) : Promise.resolve()
       ]);
 
       // Save history

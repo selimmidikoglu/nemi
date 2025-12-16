@@ -34,6 +34,16 @@ export default function AccountsPage() {
     }
   }
 
+  // Handle Outlook OAuth redirect
+  const handleOutlookOAuth = () => {
+    const userId = useAuthStore.getState().user?.id
+    if (userId) {
+      window.location.href = `http://localhost:3000/api/auth/outlook/authorize?userId=${userId}`
+    } else {
+      setError('User not authenticated')
+    }
+  }
+
   useEffect(() => {
     checkAuth()
   }, [checkAuth])
@@ -80,7 +90,7 @@ export default function AccountsPage() {
     }
   }
 
-  const handleRemove = async (id: number) => {
+  const handleRemove = async (id: string) => {
     if (confirm('Are you sure you want to remove this account?')) {
       try {
         await removeAccount(id)
@@ -90,7 +100,7 @@ export default function AccountsPage() {
     }
   }
 
-  const handleSync = async (id: number) => {
+  const handleSync = async (id: string) => {
     try {
       await syncAccount(id)
       alert('Sync started successfully')
@@ -123,7 +133,7 @@ export default function AccountsPage() {
             </button>
             <Link href="/feed" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
               <Image
-                src="/main-logo.png"
+                src="/Nemi-logo.png"
                 alt="NEMI Logo"
                 width={32}
                 height={32}
@@ -212,6 +222,28 @@ export default function AccountsPage() {
                   </div>
 
                   <div className="flex items-center gap-2">
+                    {account.provider === 'gmail' && (
+                      <button
+                        onClick={handleGmailOAuth}
+                        className="px-3 py-2 text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors flex items-center gap-1"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                        Reconnect
+                      </button>
+                    )}
+                    {account.provider === 'outlook' && (
+                      <button
+                        onClick={handleOutlookOAuth}
+                        className="px-3 py-2 text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors flex items-center gap-1"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                        Reconnect
+                      </button>
+                    )}
                     <button
                       onClick={() => handleSync(account.id)}
                       className="px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
@@ -297,13 +329,28 @@ export default function AccountsPage() {
                 </div>
               )}
 
-              {/* Outlook OAuth Flow (TODO) */}
+              {/* Outlook OAuth Flow */}
               {formData.provider === 'outlook' && (
                 <div className="space-y-4">
-                  <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 p-4 rounded-lg">
-                    <p className="text-sm text-yellow-700 dark:text-yellow-300">
-                      Outlook OAuth integration coming soon. Please use IMAP for now.
+                  <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 p-4 rounded-lg">
+                    <p className="text-sm text-blue-700 dark:text-blue-300 mb-3">
+                      Connect your Outlook account securely using Microsoft OAuth. No password required.
                     </p>
+                    <button
+                      type="button"
+                      onClick={handleOutlookOAuth}
+                      className="w-full flex items-center justify-center gap-3 px-4 py-3 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
+                    >
+                      <svg className="w-5 h-5" viewBox="0 0 23 23" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M11 11H0V0H11V11Z" fill="#F25022"/>
+                        <path d="M23 11H12V0H23V11Z" fill="#7FBA00"/>
+                        <path d="M11 23H0V12H11V23Z" fill="#00A4EF"/>
+                        <path d="M23 23H12V12H23V23Z" fill="#FFB900"/>
+                      </svg>
+                      <span className="font-medium text-gray-900 dark:text-white">
+                        Connect with Microsoft
+                      </span>
+                    </button>
                   </div>
                   <button
                     type="button"

@@ -3,12 +3,13 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import type { Email, EmailAddress } from '@/types'
 import { X, Send, Loader2, Sparkles } from 'lucide-react'
+import { apiService, Contact } from '@/lib/api'
 
 interface EmailComposeProps {
   onClose: () => void
   onSend: (emailData: SendEmailData) => Promise<void>
   replyTo?: Email
-  emailAccountId: number
+  emailAccountId: string
 }
 
 export interface SendEmailData {
@@ -18,8 +19,8 @@ export interface SendEmailData {
   subject: string
   text?: string
   html?: string
-  inReplyTo?: number
-  emailAccountId: number
+  inReplyTo?: string
+  emailAccountId: string
 }
 
 export default function EmailCompose({
@@ -40,6 +41,13 @@ export default function EmailCompose({
   const [aiSuggestion, setAiSuggestion] = useState('')
   const [isLoadingSuggestion, setIsLoadingSuggestion] = useState(false)
   const [showSuggestion, setShowSuggestion] = useState(false)
+
+  // Contact autocomplete state
+  const [contactSuggestions, setContactSuggestions] = useState<Contact[]>([])
+  const [showContactDropdown, setShowContactDropdown] = useState(false)
+  const [selectedContactIndex, setSelectedContactIndex] = useState(0)
+  const contactSearchTimerRef = useRef<NodeJS.Timeout | null>(null)
+  const toInputRef = useRef<HTMLInputElement>(null)
 
   // Helper function to parse email addresses - defined BEFORE useEffect
   const parseEmailAddress = (emailString: string | undefined | null): EmailAddress => {
@@ -87,6 +95,76 @@ export default function EmailCompose({
     if (!replyTo?.suggestedReplies) return
     setBody(replyTo.suggestedReplies[type])
     setSelectedReply(type)
+  }
+
+  // Search contacts for autocomplete
+  const searchContacts = useCallback(async (query: string) => {
+    if (query.length < 2) {
+      setContactSuggestions([])
+      setShowContactDropdown(false)
+      return
+    }
+
+    try {
+      const contacts = await apiService.searchContacts(query, emailAccountId, 8)
+      setContactSuggestions(contacts)
+      setShowContactDropdown(contacts.length > 0)
+      setSelectedContactIndex(0)
+    } catch (error) {
+      console.error('Failed to search contacts:', error)
+      setContactSuggestions([])
+      setShowContactDropdown(false)
+    }
+  }, [emailAccountId])
+
+  // Handle To field change with debounced contact search
+  const handleToChange = (value: string) => {
+    setTo(value)
+
+    // Get the last email being typed (after the last comma)
+    const parts = value.split(',')
+    const currentPart = parts[parts.length - 1].trim()
+
+    // Clear previous timer
+    if (contactSearchTimerRef.current) {
+      clearTimeout(contactSearchTimerRef.current)
+    }
+
+    // Debounce contact search
+    contactSearchTimerRef.current = setTimeout(() => {
+      searchContacts(currentPart)
+    }, 200)
+  }
+
+  // Select a contact from suggestions
+  const selectContact = (contact: Contact) => {
+    const parts = to.split(',').map(p => p.trim()).filter(p => p)
+    // Replace the last part (what user was typing) with the selected contact
+    parts.pop()
+    const displayValue = contact.name ? `${contact.name} <${contact.email}>` : contact.email
+    parts.push(displayValue)
+    setTo(parts.join(', ') + ', ')
+    setShowContactDropdown(false)
+    setContactSuggestions([])
+    toInputRef.current?.focus()
+  }
+
+  // Handle keyboard navigation in contact dropdown
+  const handleToKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!showContactDropdown || contactSuggestions.length === 0) return
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setSelectedContactIndex(i => Math.min(i + 1, contactSuggestions.length - 1))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setSelectedContactIndex(i => Math.max(i - 1, 0))
+    } else if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault()
+      selectContact(contactSuggestions[selectedContactIndex])
+    } else if (e.key === 'Escape') {
+      setShowContactDropdown(false)
+    }
   }
 
   // Debounce timer for autocomplete
@@ -328,53 +406,36 @@ export default function EmailCompose({
                   {replyTo.subject}
                 </h3>
                 <div className="text-xs text-gray-600 dark:text-gray-400 space-y-0.5">
-                  <p><span className="font-medium">From:</span> {replyTo.from}</p>
-                  <p><span className="font-medium">To:</span> {replyTo.to}</p>
+                  <p><span className="font-medium">From:</span> {typeof replyTo.from === 'string' ? replyTo.from : (replyTo.from as any)?.name ? `${(replyTo.from as any).name} <${(replyTo.from as any).email}>` : (replyTo.from as any)?.email}</p>
+                  <p><span className="font-medium">To:</span> {typeof replyTo.to === 'string' ? replyTo.to : (replyTo.to as any)?.name ? `${(replyTo.to as any).name} <${(replyTo.to as any).email}>` : (replyTo.to as any)?.email}</p>
                   <p><span className="font-medium">Date:</span> {new Date(replyTo.date).toLocaleString()}</p>
                 </div>
 
-                {/* Badges - same as EmailDetail */}
-                <div className="flex flex-wrap items-center gap-2 mt-3">
-                  {replyTo.isMeRelated && (
-                    <span className="px-2 py-1 text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200 rounded-full flex items-center gap-1">
-                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                      </svg>
-                      Personally Relevant
-                    </span>
-                  )}
-                  {replyTo.isAboutMe && (
-                    <span className="px-2 py-1 text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200 rounded-full flex items-center gap-1">
-                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 12a4 4 0 10-8 0 4 4 0 008 0zm0 0v1.5a2.5 2.5 0 005 0V12a9 9 0 10-9 9m4.5-1.206a8.959 8.959 0 01-4.5 1.207" />
-                      </svg>
-                      {replyTo.mentionContext || 'Mentions You'}
-                    </span>
-                  )}
-                  {replyTo.importance && (
-                    <span
-                      className={`px-2 py-1 text-xs font-medium rounded-full ${
-                        replyTo.importance === 'critical'
-                          ? 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
-                          : replyTo.importance === 'high'
-                          ? 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200'
-                          : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200'
-                      }`}
-                    >
-                      {replyTo.importance}
-                    </span>
-                  )}
-                  {replyTo.category && (
-                    <span className="px-2 py-1 text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 rounded-full">
-                      {replyTo.category}
-                    </span>
-                  )}
-                  {replyTo.isMeRelated && (
-                    <span className="px-2 py-1 text-xs font-medium bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200 rounded-full">
-                      Me-related
-                    </span>
-                  )}
-                </div>
+                {/* AI-generated badges - filtered same as EmailDetail/EmailList */}
+                {replyTo.badges && replyTo.badges.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-2 mt-3">
+                    {replyTo.badges
+                      .filter(badge => {
+                        const name = badge.name?.toLowerCase() || '';
+                        // Filter out importance levels and generic categories
+                        const excludedNames = ['low', 'normal', 'high', 'critical', 'other', 'general', 'misc'];
+                        return !excludedNames.includes(name);
+                      })
+                      .map((badge, index) => (
+                        <span
+                          key={index}
+                          className="px-2 py-1 text-xs font-medium rounded-full"
+                          style={{
+                            backgroundColor: badge.color ? `${badge.color}20` : '#e5e7eb',
+                            color: badge.color || '#374151',
+                          }}
+                          title={badge.category}
+                        >
+                          {badge.name}
+                        </span>
+                      ))}
+                  </div>
+                )}
               </div>
 
               {/* AI Summary - same as EmailDetail */}
@@ -407,11 +468,11 @@ export default function EmailCompose({
               )}
 
               {/* Email body - same styling as EmailDetail */}
-              <div className="prose prose-sm dark:prose-invert max-w-none [&_a]:text-blue-600 [&_a]:underline [&_a]:cursor-pointer dark:[&_a]:text-blue-400 hover:[&_a]:text-blue-800 dark:hover:[&_a]:text-blue-300">
+              <div className="max-w-none">
                 {replyTo.htmlBody ? (
                   <>
                     <div
-                      className="email-html-content text-xs [&_*]:!text-gray-900 dark:[&_*]:!text-gray-100 [&_a]:!text-blue-600 dark:[&_a]:!text-blue-400"
+                      className="email-html-content text-sm text-gray-900 dark:text-gray-100"
                       dangerouslySetInnerHTML={{ __html: replyTo.htmlBody }}
                       onClick={(e) => {
                         // Handle link clicks to open in new tab
@@ -451,19 +512,64 @@ export default function EmailCompose({
           <div className="flex-1 flex flex-col bg-white dark:bg-gray-800">
             {/* Compose Form - Gmail style with borderless inputs */}
             <div className="flex-1 flex flex-col overflow-hidden">
-              {/* To field */}
-          <div className="flex items-center border-b border-gray-200 dark:border-gray-700 px-3 py-2">
+              {/* To field with autocomplete */}
+          <div className="relative flex items-center border-b border-gray-200 dark:border-gray-700 px-3 py-2">
             <label className="text-xs text-gray-600 dark:text-gray-400 w-10">
               To
             </label>
             <input
+              ref={toInputRef}
               type="text"
               value={to}
-              onChange={(e) => setTo(e.target.value)}
+              onChange={(e) => handleToChange(e.target.value)}
+              onKeyDown={handleToKeyDown}
+              onBlur={() => setTimeout(() => setShowContactDropdown(false), 200)}
               placeholder="Recipients"
               disabled={isSending}
               className="flex-1 px-2 py-0.5 bg-transparent text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none disabled:opacity-50 text-xs"
+              autoComplete="off"
             />
+            {/* Contact autocomplete dropdown */}
+            {showContactDropdown && contactSuggestions.length > 0 && (
+              <div className="absolute left-10 top-full mt-1 w-80 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg z-50 max-h-60 overflow-y-auto">
+                {contactSuggestions.map((contact, index) => (
+                  <button
+                    key={contact.email}
+                    type="button"
+                    onClick={() => selectContact(contact)}
+                    className={`w-full px-3 py-2 text-left flex items-center gap-3 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors ${
+                      index === selectedContactIndex ? 'bg-blue-50 dark:bg-blue-900/30' : ''
+                    }`}
+                  >
+                    {/* Avatar */}
+                    {contact.photoUrl ? (
+                      <img
+                        src={contact.photoUrl}
+                        alt=""
+                        className="w-8 h-8 rounded-full object-cover"
+                      />
+                    ) : (
+                      <div className="w-8 h-8 rounded-full bg-gray-200 dark:bg-gray-600 flex items-center justify-center text-xs font-medium text-gray-600 dark:text-gray-300">
+                        {(contact.name || contact.email).charAt(0).toUpperCase()}
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      {contact.name && (
+                        <div className="text-sm font-medium text-gray-900 dark:text-white truncate">
+                          {contact.name}
+                        </div>
+                      )}
+                      <div className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                        {contact.email}
+                      </div>
+                    </div>
+                    {contact.source === 'google' && (
+                      <span className="text-[10px] text-gray-400 dark:text-gray-500">Contacts</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="flex items-center gap-1">
               {!showCc && (
                 <button
@@ -638,56 +744,67 @@ export default function EmailCompose({
             {/* Footer - Gmail style toolbar */}
             <div className="flex items-center justify-between px-3 py-2 border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
               {/* Left side - formatting tools */}
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-0.5">
                 <button
-                  onClick={handleSend}
-                  disabled={isSending}
-                  className="px-4 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm transition-all"
+                  onClick={() => alert('Formatting options coming soon')}
+                  className="p-1.5 text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800 rounded transition-colors"
+                  title="Formatting options"
                 >
-                  {isSending ? (
-                    <>
-                      <Loader2 className="w-3 h-3 animate-spin" />
-                      Sending...
-                    </>
-                  ) : (
-                    <>
-                      Send
-                    </>
-                  )}
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16m-7 6h7" />
+                  </svg>
                 </button>
-
-                <div className="flex items-center gap-0.5 ml-2">
-                  <button className="p-1.5 text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800 rounded transition-colors" title="Formatting options">
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16m-7 6h7" />
-                    </svg>
-                  </button>
-                  <button className="p-1.5 text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800 rounded transition-colors" title="Attach files">
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
-                    </svg>
-                  </button>
-                  <button className="p-1.5 text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800 rounded transition-colors" title="Insert link">
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                    </svg>
-                  </button>
-                  <button className="p-1.5 text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800 rounded transition-colors" title="Insert emoji">
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                  </button>
-                  <button className="p-1.5 text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800 rounded transition-colors" title="Insert image">
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                    </svg>
-                  </button>
-                </div>
+                <button
+                  onClick={() => alert('File attachments coming soon')}
+                  className="p-1.5 text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800 rounded transition-colors"
+                  title="Attach files"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                  </svg>
+                </button>
+                <button
+                  onClick={() => {
+                    const url = prompt('Enter URL:')
+                    if (url) {
+                      const linkText = prompt('Enter link text (optional):') || url
+                      setBody(body + `[${linkText}](${url})`)
+                    }
+                  }}
+                  className="p-1.5 text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800 rounded transition-colors"
+                  title="Insert link"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                  </svg>
+                </button>
+                <button
+                  onClick={() => alert('Emoji picker coming soon')}
+                  className="p-1.5 text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800 rounded transition-colors"
+                  title="Insert emoji"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </button>
+                <button
+                  onClick={() => alert('Image insertion coming soon')}
+                  className="p-1.5 text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800 rounded transition-colors"
+                  title="Insert image"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                  </svg>
+                </button>
               </div>
 
-              {/* Right side - more options and delete */}
+              {/* Right side - more options, delete, and send */}
               <div className="flex items-center gap-1">
-                <button className="p-1.5 text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800 rounded transition-colors" title="More options">
+                <button
+                  onClick={() => alert('More options coming soon')}
+                  className="p-1.5 text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800 rounded transition-colors"
+                  title="More options"
+                >
                   <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
                   </svg>
@@ -701,6 +818,20 @@ export default function EmailCompose({
                   <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                   </svg>
+                </button>
+                <button
+                  onClick={handleSend}
+                  disabled={isSending}
+                  className="ml-1 px-4 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm transition-all"
+                >
+                  {isSending ? (
+                    <>
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      Sending...
+                    </>
+                  ) : (
+                    'Send'
+                  )}
                 </button>
               </div>
             </div>

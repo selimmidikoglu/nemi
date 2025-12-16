@@ -272,16 +272,102 @@ export class UserEmailAccountService {
   }
 
   /**
-   * Delete an email account
+   * Delete an email account and all associated data (emails, badges, contacts)
    */
-  async deleteEmailAccount(accountId: string, userId: string): Promise<boolean> {
+  async deleteEmailAccount(accountId: string, userId: string): Promise<{ deleted: boolean; emailsDeleted: number }> {
+    // Start a transaction to ensure all deletions succeed or fail together
+    const client = await this.pool.connect();
+
+    try {
+      await client.query('BEGIN');
+
+      // First, delete email_badges for emails in this account
+      await client.query(`
+        DELETE FROM email_badges
+        WHERE email_id IN (
+          SELECT id FROM emails WHERE email_account_id = $1 AND user_id = $2
+        )
+      `, [accountId, userId]);
+
+      // Delete all emails for this account
+      const emailDeleteResult = await client.query(`
+        DELETE FROM emails
+        WHERE email_account_id = $1 AND user_id = $2
+      `, [accountId, userId]);
+
+      const emailsDeleted = emailDeleteResult.rowCount || 0;
+
+      // Delete contacts associated with this account (if contacts table exists)
+      try {
+        await client.query(`
+          DELETE FROM contacts WHERE email_account_id = $1
+        `, [accountId]);
+      } catch (e) {
+        // Contacts table might not exist, ignore
+      }
+
+      // Finally, delete the email account
+      const accountDeleteResult = await client.query(`
+        DELETE FROM email_accounts
+        WHERE id = $1 AND user_id = $2
+      `, [accountId, userId]);
+
+      await client.query('COMMIT');
+
+      return {
+        deleted: accountDeleteResult.rowCount ? accountDeleteResult.rowCount > 0 : false,
+        emailsDeleted
+      };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Get sync status for all user accounts (for initial sync indicator)
+   */
+  async getSyncStatus(userId: string): Promise<{
+    accounts: Array<{
+      id: string;
+      emailAddress: string;
+      initialSyncComplete: boolean;
+      lastSyncAt: Date | null;
+      emailCount: number;
+    }>;
+    hasAccountsSyncing: boolean;
+  }> {
     const query = `
-      DELETE FROM email_accounts
-      WHERE id = $1 AND user_id = $2
+      SELECT
+        ea.id,
+        ea.email_address,
+        ea.initial_sync_complete,
+        ea.last_sync_at,
+        COALESCE(ec.email_count, 0) as email_count
+      FROM email_accounts ea
+      LEFT JOIN (
+        SELECT email_account_id, COUNT(*) as email_count
+        FROM emails
+        GROUP BY email_account_id
+      ) ec ON ec.email_account_id = ea.id
+      WHERE ea.user_id = $1 AND ea.is_active = true
     `;
 
-    const result = await this.pool.query(query, [accountId, userId]);
-    return result.rowCount ? result.rowCount > 0 : false;
+    const result = await this.pool.query(query, [userId]);
+
+    const accounts = result.rows.map(row => ({
+      id: row.id,
+      emailAddress: row.email_address,
+      initialSyncComplete: row.initial_sync_complete === true,
+      lastSyncAt: row.last_sync_at,
+      emailCount: parseInt(row.email_count) || 0
+    }));
+
+    const hasAccountsSyncing = accounts.some(a => !a.initialSyncComplete);
+
+    return { accounts, hasAccountsSyncing };
   }
 
   /**

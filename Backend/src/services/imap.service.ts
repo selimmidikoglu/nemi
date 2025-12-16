@@ -29,6 +29,9 @@ export interface FetchedEmail {
   isRead: boolean;
   uid: number | string;
   providerType?: string;
+  // Unsubscribe info from List-Unsubscribe header
+  unsubscribeUrl?: string | null;
+  unsubscribeEmail?: string | null;
 }
 
 export class ImapService {

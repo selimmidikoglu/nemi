@@ -4,7 +4,7 @@ import { pool } from '../config/database';
 import WebSocket from 'ws';
 import { GmailService } from './gmail.service';
 import { DeepEmailAnalyzerService } from './deep-email-analyzer.service';
-import { parseEmailSender } from '../utils/email-domain-parser';
+import { LogoService } from './logo.service';
 import { PeopleService } from './people.service';
 
 export interface GmailPushConfig {
@@ -234,7 +234,7 @@ export class GmailPushService {
     userId: string,
     emailAccountId: string
   ): Promise<any[]> {
-    const gmailService = new GmailService(config);
+    const gmailService = new GmailService({ ...config, accountId: emailAccountId });
     const deepAnalyzer = new DeepEmailAnalyzerService(pool);
     const peopleService = new PeopleService(config);
     const savedEmails: any[] = [];
@@ -278,10 +278,11 @@ export class GmailPushService {
 
         const aiAnalysis = await deepAnalyzer.analyzeEmailBeforeSave(emailForAnalysis, userId);
 
-        // Parse sender info
-        const senderInfo = parseEmailSender(email.from.email);
-        const companyName = senderInfo.knownService || senderInfo.companyName || null;
-        const companyLogoUrl = companyName ? `https://logo.clearbit.com/${senderInfo.domain}` : null;
+        // Get company logo from LogoService (uses caching)
+        const logoInfo = await LogoService.getLogoForEmail(email.from.email);
+        const companyName = logoInfo.companyName;
+        const companyDomain = logoInfo.companyDomain;
+        const companyLogoUrl = logoInfo.logoUrl;
 
         // Get sender profile photo (from People API cache)
         const senderProfilePhotoUrl = profilePhotos.get(email.from.email) || null;
@@ -294,9 +295,9 @@ export class GmailPushService {
               subject, body, html_body, snippet, date, is_read, is_starred, has_attachments,
               category, importance, is_personally_relevant, extracted_images,
               email_account_id, ai_summary, master_importance_score, ai_analyzed_at, imap_uid, provider_type,
-              company_name, company_logo_url, is_about_me, mention_context, html_snippet, render_as_html
+              company_name, company_domain, company_logo_url, is_about_me, mention_context, html_snippet, render_as_html
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33)
             RETURNING id`,
             [
               userId,
@@ -326,6 +327,7 @@ export class GmailPushService {
               email.uid,
               'gmail',
               companyName,
+              companyDomain,
               companyLogoUrl,
               aiAnalysis.is_about_me || false,
               aiAnalysis.mention_context || null,

@@ -198,6 +198,10 @@ class ApiService {
     clearAuthData()
   }
 
+  async resendVerificationEmail(): Promise<void> {
+    await this.api.post('/api/auth/resend-verification')
+  }
+
   // Collect device information for session tracking
   private collectDeviceInfo(): { userAgent?: string; deviceType?: string } {
     if (typeof window === 'undefined') return {}
@@ -240,15 +244,40 @@ class ApiService {
 
       return {
         ...email,
+        // Sender info
+        from: email.from_name || email.from_email || email.from || 'Unknown',
+        fromName: email.from_name || email.fromName,
+        fromEmail: email.from_email || email.fromEmail,
+        // Recipient info
         to: toField,
+        // Email content
         htmlBody: email.html_body || email.htmlBody,
-        textBody: email.text_body || email.textBody,
+        textBody: email.text_body || email.textBody || email.body,
+        htmlSnippet: email.html_snippet || email.htmlSnippet,
+        renderAsHtml: email.render_as_html !== undefined ? email.render_as_html : email.renderAsHtml,
+        aiSummary: email.ai_summary || email.aiSummary,
+        // Status flags
         isRead: email.is_read !== undefined ? email.is_read : email.isRead,
         isStarred: email.is_starred !== undefined ? email.is_starred : email.isStarred,
-        hasAttachment: email.has_attachment !== undefined ? email.has_attachment : email.hasAttachment,
+        isArchived: email.is_archived !== undefined ? email.is_archived : email.isArchived,
+        isDeleted: email.is_deleted !== undefined ? email.is_deleted : email.isDeleted,
+        hasAttachments: email.has_attachments !== undefined ? email.has_attachments : email.hasAttachments,
+        // Company/sender info
         companyName: email.company_name !== undefined ? email.company_name : email.companyName,
         companyLogoUrl: email.company_logo_url !== undefined ? email.company_logo_url : email.companyLogoUrl,
+        companyDomain: email.company_domain !== undefined ? email.company_domain : email.companyDomain,
+        // Account info
         emailAccountId: email.email_account_id !== undefined ? email.email_account_id : email.emailAccountId,
+        // AI analysis
+        category: email.category,
+        importance: email.importance,
+        masterImportanceScore: email.master_importance_score !== undefined ? email.master_importance_score : email.masterImportanceScore,
+        isPersonallyRelevant: email.is_personally_relevant !== undefined ? email.is_personally_relevant : email.isPersonallyRelevant,
+        isAboutMe: email.is_about_me !== undefined ? email.is_about_me : email.isAboutMe,
+        mentionContext: email.mention_context || email.mentionContext,
+        // Unsubscribe
+        unsubscribeUrl: email.unsubscribe_url || email.unsubscribeUrl,
+        unsubscribeEmail: email.unsubscribe_email || email.unsubscribeEmail,
       }
     })
 
@@ -268,27 +297,118 @@ class ApiService {
     return response.data
   }
 
-  async markEmailAsRead(id: number, isRead: boolean): Promise<Email> {
+  async markEmailAsRead(id: string, isRead: boolean): Promise<Email> {
     const response = await this.api.patch<Email>(`/api/emails/${id}/read`, { isRead })
     return response.data
   }
 
-  async toggleEmailStar(id: number, isStarred: boolean): Promise<Email> {
+  async toggleEmailStar(id: string, isStarred: boolean): Promise<Email> {
     const response = await this.api.patch<Email>(`/api/emails/${id}/star`, { isStarred })
     return response.data
   }
 
-  async deleteEmail(id: number): Promise<void> {
+  async deleteEmail(id: string): Promise<void> {
     await this.api.delete(`/api/emails/${id}`)
   }
 
-  async deleteEmails(ids: number[]): Promise<void> {
+  async deleteEmails(ids: string[]): Promise<void> {
     await this.api.post('/api/emails/bulk-delete', { emailIds: ids })
   }
 
   async syncEmails(provider: string = 'Gmail'): Promise<ApiResponse<any>> {
     const response = await this.api.post<ApiResponse<any>>('/api/emails/fetch', { provider })
     return response.data
+  }
+
+  // Advanced search with Elasticsearch
+  async advancedSearch(params: {
+    from?: string
+    to?: string
+    subject?: string
+    hasWords?: string
+    doesntHave?: string
+    hasAttachment?: boolean
+    dateWithin?: number
+    dateFrom?: string
+    dateTo?: string
+    page?: number
+    limit?: number
+  }): Promise<{ emails: Email[]; total: number; totalPages: number }> {
+    const queryParams: any = {}
+    if (params.from) queryParams.from = params.from
+    if (params.to) queryParams.to = params.to
+    if (params.subject) queryParams.subject = params.subject
+    if (params.hasWords) queryParams.hasWords = params.hasWords
+    if (params.doesntHave) queryParams.doesntHave = params.doesntHave
+    if (params.hasAttachment !== undefined) queryParams.hasAttachment = params.hasAttachment
+    if (params.dateWithin) queryParams.dateWithin = params.dateWithin
+    if (params.dateFrom) queryParams.dateFrom = params.dateFrom
+    if (params.dateTo) queryParams.dateTo = params.dateTo
+    if (params.page) queryParams.page = params.page
+    if (params.limit) queryParams.limit = params.limit
+
+    const response = await this.api.get<any>('/api/search', { params: queryParams })
+
+    // Map the response to our Email format (snake_case -> camelCase)
+    const emails = (response.data.emails || []).map((email: any) => {
+      let toField = 'Unknown';
+      const toData = email.to_emails || email.to;
+      if (Array.isArray(toData) && toData.length > 0) {
+        const firstRecipient = toData[0];
+        if (typeof firstRecipient === 'object' && firstRecipient !== null) {
+          toField = firstRecipient.name || firstRecipient.email || 'Unknown';
+        } else if (typeof firstRecipient === 'string') {
+          toField = firstRecipient;
+        }
+      } else if (typeof toData === 'string') {
+        toField = toData;
+      }
+
+      return {
+        ...email,
+        // Sender info
+        from: email.from_name || email.from_email || email.from || 'Unknown',
+        fromName: email.from_name || email.fromName,
+        fromEmail: email.from_email || email.fromEmail,
+        // Recipient info
+        to: toField,
+        // Email content
+        htmlBody: email.html_body || email.htmlBody,
+        textBody: email.text_body || email.textBody || email.body,
+        htmlSnippet: email.html_snippet || email.htmlSnippet,
+        renderAsHtml: email.render_as_html !== undefined ? email.render_as_html : email.renderAsHtml,
+        aiSummary: email.ai_summary || email.aiSummary,
+        // Status flags
+        isRead: email.is_read !== undefined ? email.is_read : email.isRead,
+        isStarred: email.is_starred !== undefined ? email.is_starred : email.isStarred,
+        isArchived: email.is_archived !== undefined ? email.is_archived : email.isArchived,
+        isDeleted: email.is_deleted !== undefined ? email.is_deleted : email.isDeleted,
+        hasAttachments: email.has_attachments !== undefined ? email.has_attachments : email.hasAttachments,
+        // Company/sender info
+        companyName: email.company_name !== undefined ? email.company_name : email.companyName,
+        companyLogoUrl: email.company_logo_url !== undefined ? email.company_logo_url : email.companyLogoUrl,
+        companyDomain: email.company_domain !== undefined ? email.company_domain : email.companyDomain,
+        // Account info
+        emailAccountId: email.email_account_id !== undefined ? email.email_account_id : email.emailAccountId,
+        // AI analysis
+        category: email.category,
+        importance: email.importance,
+        masterImportanceScore: email.master_importance_score !== undefined ? email.master_importance_score : email.masterImportanceScore,
+        isPersonallyRelevant: email.is_personally_relevant !== undefined ? email.is_personally_relevant : email.isPersonallyRelevant,
+        isAboutMe: email.is_about_me !== undefined ? email.is_about_me : email.isAboutMe,
+        mentionContext: email.mention_context || email.mentionContext,
+        // Unsubscribe
+        unsubscribeUrl: email.unsubscribe_url || email.unsubscribeUrl,
+        unsubscribeEmail: email.unsubscribe_email || email.unsubscribeEmail,
+      }
+    })
+
+    return {
+      emails,
+      total: response.data.total || 0,
+      totalPages: response.data.totalPages || 1,
+      badgeStats: response.data.badgeStats || []
+    }
   }
 
   // Email Account endpoints
@@ -336,11 +456,11 @@ class ApiService {
     } as EmailAccount
   }
 
-  async removeEmailAccount(id: number): Promise<void> {
+  async removeEmailAccount(id: string): Promise<void> {
     await this.api.delete(`/api/email-accounts/${id}`)
   }
 
-  async syncEmailAccount(id: number): Promise<ApiResponse<any>> {
+  async syncEmailAccount(id: string): Promise<ApiResponse<any>> {
     // Note: Backend doesn't have a direct sync endpoint per account
     // Sync happens through background jobs
     // For now, we'll just fetch emails using the fetch endpoint
@@ -348,13 +468,15 @@ class ApiService {
   }
 
   // Badge endpoints
-  async getBadgeStats(): Promise<any> {
-    const response = await this.api.get('/api/emails/badges/stats')
+  async getBadgeStats(emailAccountId?: string | null): Promise<any> {
+    const params = emailAccountId ? { emailAccountId } : {}
+    const response = await this.api.get('/api/emails/badges/stats', { params })
     return response.data
   }
 
-  async getCategoryStats(): Promise<any> {
-    const response = await this.api.get('/api/emails/categories/stats')
+  async getCategoryStats(emailAccountId?: string | null): Promise<any> {
+    const params = emailAccountId ? { emailAccountId } : {}
+    const response = await this.api.get('/api/emails/categories/stats', { params })
     return response.data
   }
 
@@ -394,6 +516,287 @@ class ApiService {
     })
     return response.data
   }
+
+  // Snoozed emails endpoint
+  async getSnoozedEmails(): Promise<Email[]> {
+    const response = await this.api.get<any>('/api/emails/snoozed')
+    return (response.data.emails || []).map((email: any) => ({
+      ...email,
+      to: this.formatToField(email),
+      htmlBody: email.html_body || email.htmlBody,
+      textBody: email.text_body || email.textBody,
+      isRead: email.is_read ?? email.isRead,
+      isStarred: email.is_starred ?? email.isStarred,
+      snoozedUntil: email.snoozed_until || email.snoozedUntil,
+    }))
+  }
+
+  // Archived emails endpoint
+  async getArchivedEmails(limit?: number, offset?: number): Promise<Email[]> {
+    const response = await this.api.get<any>('/api/emails/archived', {
+      params: { limit: limit || 50, offset: offset || 0 }
+    })
+    return (response.data.emails || []).map((email: any) => ({
+      ...email,
+      to: this.formatToField(email),
+      htmlBody: email.html_body || email.htmlBody,
+      textBody: email.text_body || email.textBody,
+      isRead: email.is_read ?? email.isRead,
+      isStarred: email.is_starred ?? email.isStarred,
+      isArchived: email.is_archived ?? email.isArchived,
+    }))
+  }
+
+  // Deleted/Trash emails endpoint
+  async getDeletedEmails(limit?: number, offset?: number): Promise<Email[]> {
+    const response = await this.api.get<any>('/api/emails/deleted', {
+      params: { limit: limit || 50, offset: offset || 0 }
+    })
+    return (response.data.emails || []).map((email: any) => ({
+      ...email,
+      to: this.formatToField(email),
+      htmlBody: email.html_body || email.htmlBody,
+      textBody: email.text_body || email.textBody,
+      isRead: email.is_read ?? email.isRead,
+      isStarred: email.is_starred ?? email.isStarred,
+      isDeleted: email.is_deleted ?? email.isDeleted,
+      deletedAt: email.deleted_at || email.deletedAt,
+    }))
+  }
+
+  // Soft delete email (move to trash)
+  async softDeleteEmail(id: string): Promise<void> {
+    await this.api.post(`/api/emails/${id}/trash`)
+  }
+
+  // Restore email from trash
+  async restoreEmail(id: string): Promise<void> {
+    await this.api.delete(`/api/emails/${id}/trash`)
+  }
+
+  // Permanently delete email from trash
+  async permanentlyDeleteEmail(id: string): Promise<void> {
+    await this.api.delete(`/api/emails/${id}`)
+  }
+
+  // Helper to format 'to' field
+  private formatToField(email: any): string {
+    const toData = email.to_emails || email.to
+    if (Array.isArray(toData) && toData.length > 0) {
+      const firstRecipient = toData[0]
+      if (typeof firstRecipient === 'object' && firstRecipient !== null) {
+        return firstRecipient.name || firstRecipient.email || 'Unknown'
+      } else if (typeof firstRecipient === 'string') {
+        return firstRecipient
+      }
+    } else if (typeof toData === 'string') {
+      return toData
+    }
+    return 'Unknown'
+  }
+
+  // ==========================================
+  // Unsubscribe Recommendations API
+  // ==========================================
+
+  async getUnsubscribeSettings(): Promise<UnsubscribeSettings> {
+    const response = await this.api.get<any>('/api/unsubscribe/settings')
+    const data = response.data
+    return {
+      enabled: data.enabled,
+      timeRangeDays: data.time_range_days ?? data.timeRangeDays,
+      minEmailsThreshold: data.min_emails_threshold ?? data.minEmailsThreshold,
+      maxOpenRateThreshold: data.max_open_rate_threshold ?? data.maxOpenRateThreshold,
+      showNotificationBadge: data.show_notification_badge ?? data.showNotificationBadge,
+      inactiveDaysThreshold: data.inactive_days_threshold ?? data.inactiveDaysThreshold ?? 30,
+    }
+  }
+
+  async updateUnsubscribeSettings(settings: Partial<UnsubscribeSettings>): Promise<UnsubscribeSettings> {
+    const payload = {
+      enabled: settings.enabled,
+      time_range_days: settings.timeRangeDays,
+      min_emails_threshold: settings.minEmailsThreshold,
+      max_open_rate_threshold: settings.maxOpenRateThreshold,
+      show_notification_badge: settings.showNotificationBadge,
+      inactive_days_threshold: settings.inactiveDaysThreshold,
+    }
+    const response = await this.api.patch<any>('/api/unsubscribe/settings', payload)
+    const data = response.data
+    return {
+      enabled: data.enabled,
+      timeRangeDays: data.time_range_days ?? data.timeRangeDays,
+      minEmailsThreshold: data.min_emails_threshold ?? data.minEmailsThreshold,
+      maxOpenRateThreshold: data.max_open_rate_threshold ?? data.maxOpenRateThreshold,
+      showNotificationBadge: data.show_notification_badge ?? data.showNotificationBadge,
+      inactiveDaysThreshold: data.inactive_days_threshold ?? data.inactiveDaysThreshold ?? 30,
+    }
+  }
+
+  async getUnsubscribeRecommendations(): Promise<UnsubscribeRecommendation[]> {
+    const response = await this.api.get<any>('/api/unsubscribe/recommendations')
+    return (response.data.recommendations || []).map((rec: any) => ({
+      id: rec.id,
+      senderEmail: rec.sender_email ?? rec.senderEmail,
+      senderName: rec.sender_name ?? rec.senderName,
+      companyName: rec.company_name ?? rec.companyName,
+      companyLogoUrl: rec.company_logo_url ?? rec.companyLogoUrl,
+      totalEmails: rec.total_emails ?? rec.totalEmails,
+      emailsOpened: rec.emails_opened ?? rec.emailsOpened,
+      openRate: parseFloat(rec.open_rate ?? rec.openRate ?? 0),
+      daysSinceLastOpen: rec.days_since_last_open ?? rec.daysSinceLastOpen,
+      recommendationScore: parseFloat(rec.recommendation_score ?? rec.recommendationScore ?? 0),
+      status: rec.status,
+      unsubscribeUrl: rec.unsubscribe_url ?? rec.unsubscribeUrl,
+      unsubscribeEmail: rec.unsubscribe_email ?? rec.unsubscribeEmail,
+      createdAt: rec.created_at ?? rec.createdAt,
+    }))
+  }
+
+  async getUnsubscribeRecommendationCount(): Promise<number> {
+    const response = await this.api.get<any>('/api/unsubscribe/recommendations/count')
+    return response.data.count || 0
+  }
+
+  async dismissUnsubscribeRecommendation(senderEmail: string): Promise<void> {
+    await this.api.post('/api/unsubscribe/recommendations/dismiss', { senderEmail })
+  }
+
+  async unsubscribeFromSenders(senderEmails: string[]): Promise<UnsubscribeResult[]> {
+    const response = await this.api.post<any>('/api/unsubscribe/unsubscribe', { senderEmails })
+    return (response.data.results || []).map((result: any) => ({
+      senderEmail: result.sender_email ?? result.senderEmail,
+      success: result.success,
+      method: result.method,
+      error: result.error,
+    }))
+  }
+
+  async generateUnsubscribeRecommendations(): Promise<{ count: number }> {
+    const response = await this.api.post<any>('/api/unsubscribe/recommendations/generate')
+    return { count: response.data.count || 0 }
+  }
+
+  async getSenderMetrics(limit?: number, offset?: number): Promise<SenderMetrics[]> {
+    const response = await this.api.get<any>('/api/unsubscribe/senders', {
+      params: { limit: limit || 50, offset: offset || 0 }
+    })
+    return (response.data.senders || []).map((sender: any) => ({
+      id: sender.id,
+      senderEmail: sender.sender_email ?? sender.senderEmail,
+      senderName: sender.sender_name ?? sender.senderName,
+      companyName: sender.company_name ?? sender.companyName,
+      totalEmails: sender.total_emails ?? sender.totalEmails,
+      emailsOpened: sender.emails_opened ?? sender.emailsOpened,
+      openRate: parseFloat(sender.open_rate ?? sender.openRate ?? 0),
+      engagementScore: parseFloat(sender.engagement_score ?? sender.engagementScore ?? 0),
+      hasUnsubscribeOption: sender.has_unsubscribe_option ?? sender.hasUnsubscribeOption,
+      isUnsubscribed: sender.is_unsubscribed ?? sender.isUnsubscribed,
+      lastEmailAt: sender.last_email_at ?? sender.lastEmailAt,
+      lastOpenedAt: sender.last_opened_at ?? sender.lastOpenedAt,
+    }))
+  }
+
+  async getLowEngagementSenders(timeRangeDays?: number): Promise<SenderMetrics[]> {
+    const response = await this.api.get<any>('/api/unsubscribe/senders/low-engagement', {
+      params: timeRangeDays ? { time_range_days: timeRangeDays } : undefined
+    })
+    return (response.data.senders || []).map((sender: any) => ({
+      id: sender.id,
+      senderEmail: sender.sender_email ?? sender.senderEmail,
+      senderName: sender.sender_name ?? sender.senderName,
+      companyName: sender.company_name ?? sender.companyName,
+      totalEmails: sender.total_emails ?? sender.totalEmails,
+      emailsOpened: sender.emails_opened ?? sender.emailsOpened,
+      openRate: parseFloat(sender.open_rate ?? sender.openRate ?? 0),
+      engagementScore: parseFloat(sender.engagement_score ?? sender.engagementScore ?? 0),
+      hasUnsubscribeOption: sender.has_unsubscribe_option ?? sender.hasUnsubscribeOption,
+      isUnsubscribed: sender.is_unsubscribed ?? sender.isUnsubscribed,
+      lastEmailAt: sender.last_email_at ?? sender.lastEmailAt,
+      lastOpenedAt: sender.last_opened_at ?? sender.lastOpenedAt,
+    }))
+  }
+
+  // Contacts endpoints
+  async searchContacts(query: string, emailAccountId?: string, limit: number = 10): Promise<Contact[]> {
+    const response = await this.api.get('/api/contacts/search', {
+      params: { q: query, emailAccountId, limit }
+    })
+    return response.data.contacts || []
+  }
+
+  async getRecentContacts(limit: number = 5): Promise<Contact[]> {
+    const response = await this.api.get('/api/contacts/recent', {
+      params: { limit }
+    })
+    return response.data.contacts || []
+  }
+
+  async getFrequentContacts(limit: number = 10): Promise<Contact[]> {
+    const response = await this.api.get('/api/contacts/frequent', {
+      params: { limit }
+    })
+    return response.data.contacts || []
+  }
+}
+
+// Contact type
+export interface Contact {
+  email: string
+  name?: string
+  photoUrl?: string
+  frequency: number
+  lastUsed: string
+  source?: 'google' | 'email'
+}
+
+// Unsubscribe Types
+export interface UnsubscribeSettings {
+  enabled: boolean
+  timeRangeDays: number
+  minEmailsThreshold: number
+  maxOpenRateThreshold: number
+  showNotificationBadge: boolean
+  inactiveDaysThreshold: number
+}
+
+export interface UnsubscribeRecommendation {
+  id: string
+  senderEmail: string
+  senderName: string | null
+  companyName: string | null
+  companyLogoUrl: string | null
+  totalEmails: number
+  emailsOpened: number
+  openRate: number
+  daysSinceLastOpen: number | null
+  recommendationScore: number
+  status: 'pending' | 'dismissed' | 'unsubscribed'
+  unsubscribeUrl: string | null
+  unsubscribeEmail: string | null
+  createdAt: string
+}
+
+export interface UnsubscribeResult {
+  senderEmail: string
+  success: boolean
+  method: 'url' | 'email' | null
+  error?: string
+}
+
+export interface SenderMetrics {
+  id: string
+  senderEmail: string
+  senderName: string | null
+  companyName: string | null
+  totalEmails: number
+  emailsOpened: number
+  openRate: number
+  engagementScore: number
+  hasUnsubscribeOption: boolean
+  isUnsubscribed: boolean
+  lastEmailAt: string | null
+  lastOpenedAt: string | null
 }
 
 export const apiService = new ApiService()

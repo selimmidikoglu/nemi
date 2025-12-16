@@ -19,6 +19,7 @@ import {
 } from 'recharts'
 import { format, subDays, getDay } from 'date-fns'
 import Image from 'next/image'
+import { Info } from 'lucide-react'
 
 interface BadgeStats {
   name: string
@@ -55,8 +56,11 @@ const DOMAIN_MAP: Record<string, string> = {
 }
 
 // Get company logo URL using both Clearbit and Logo.dev as fallback
+// Now supports all badge types that might have a recognizable logo
 function getCompanyLogoUrl(badgeName: string, category?: string): string | null {
-  if (category !== 'Company') return null
+  // Skip system badges that definitely don't have logos
+  const systemBadges = ['Automated', 'Promotional', 'Newsletter', 'Marketing', 'Spam', 'Shopping', 'Other', 'Confirmation', 'Personal', 'Work', 'Social']
+  if (systemBadges.includes(badgeName)) return null
 
   const domain = DOMAIN_MAP[badgeName] || `${badgeName.toLowerCase().replace(/\s+/g, '')}.com`
   // Primary: Clearbit, Fallback: Logo.dev
@@ -127,8 +131,12 @@ export default function AnalyticsOverviewPage() {
   const [badgeStats, setBadgeStats] = useState<BadgeStats[]>([])
   const [groupedBadgeStats, setGroupedBadgeStats] = useState<BadgeStats[]>([])
   const [heatmapData, setHeatmapData] = useState<HeatmapData[]>([])
+  const [totalUniqueEmails, setTotalUniqueEmails] = useState<number>(0)
+  const [totalUniqueTimeSeconds, setTotalUniqueTimeSeconds] = useState<number>(0)
   const [isLoading, setIsLoading] = useState(true)
   const [hasData, setHasData] = useState(false)
+  const [activeTimeIndex, setActiveTimeIndex] = useState<number | null>(null)
+  const [activeEmailIndex, setActiveEmailIndex] = useState<number | null>(null)
 
   useEffect(() => {
     checkAuth()
@@ -147,6 +155,10 @@ export default function AnalyticsOverviewPage() {
     try {
       // Fetch analytics overview using the API service
       const data = await apiService.getAnalyticsOverview()
+
+      // Store total unique counts from API
+      setTotalUniqueEmails(data.totalUniqueEmails || 0)
+      setTotalUniqueTimeSeconds(data.totalUniqueTimeSeconds || 0)
 
       // Process badges with company logos
       const processedBadges: BadgeStats[] = (data.badges || []).map((badge: any) => ({
@@ -207,8 +219,10 @@ export default function AnalyticsOverviewPage() {
     return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`
   }
 
-  const totalTimeSpent = badgeStats.reduce((sum, badge) => sum + badge.timeSpent, 0)
-  const totalEmails = badgeStats.reduce((sum, badge) => sum + badge.totalEmails, 0)
+  // Use unique time from API to avoid double-counting time for emails with multiple badges
+  const totalTimeSpent = totalUniqueTimeSeconds
+  // Use unique email count from API to avoid double-counting emails with multiple badges
+  const totalEmails = totalUniqueEmails
   const avgOpenRate = badgeStats.length > 0
     ? badgeStats.reduce((sum, badge) => sum + badge.openRate, 0) / badgeStats.length
     : 0
@@ -280,70 +294,172 @@ export default function AnalyticsOverviewPage() {
           />
         </div>
 
-        {/* Time Allocation */}
+        {/* Time Allocation & Email Distribution - Side by side with legends below */}
         <div className="grid grid-cols-2 gap-4">
+          {/* Time Allocation */}
           <div className="bg-card border border-border rounded-lg p-6">
-            <h2 className="text-lg font-semibold text-foreground mb-4">Time Allocation</h2>
-            {groupedBadgeStats.length > 0 && totalTimeSpent > 0 ? (
-              <ResponsiveContainer width="100%" height={300}>
-                <PieChart>
-                  <Pie
-                    data={groupedBadgeStats.map(badge => ({
-                      name: badge.name,
-                      value: badge.timeSpent,
-                    }))}
-                    cx="50%"
-                    cy="50%"
-                    labelLine={false}
-                    label={({ name, value }) => value > 0 ? `${name}: ${formatTime(value)}` : ''}
-                    outerRadius={100}
-                    fill="#8884d8"
-                    dataKey="value"
-                    fontSize={10}
-                  >
-                    {groupedBadgeStats.map((_, index) => (
-                      <Cell key={`cell-${index}`} fill={PIE_CHART_COLORS[index % PIE_CHART_COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip formatter={(value: any) => formatTime(value)} />
-                </PieChart>
-              </ResponsiveContainer>
-            ) : (
-              <div className="h-[300px] flex items-center justify-center text-muted-foreground">
-                <div className="text-center">
-                  <p className="text-lg">No time data yet</p>
-                  <p className="text-sm mt-2">Start reading emails to track time spent</p>
+            <div className="flex items-center gap-2 mb-4">
+              <h2 className="text-lg font-semibold text-foreground">Time Allocation</h2>
+              <div className="relative group">
+                <Info className="w-4 h-4 text-muted-foreground cursor-help" />
+                <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-3 py-2 bg-popover border border-border rounded-lg shadow-lg text-xs text-popover-foreground w-64 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50">
+                  <p className="font-medium mb-1">How time is calculated:</p>
+                  <p className="text-muted-foreground">Time spent reading an email is attributed to each badge on that email. If an email has multiple badges, the time appears under each badge separately in this chart.</p>
+                  <p className="text-muted-foreground mt-1">The &quot;Total Time Spent&quot; metric above shows unique time (not double-counted).</p>
+                  <div className="absolute left-1/2 -translate-x-1/2 top-full w-2 h-2 bg-popover border-r border-b border-border rotate-45 -mt-1"></div>
                 </div>
               </div>
-            )}
+            </div>
+            {(() => {
+              // Filter badges that have actual time spent (> 0)
+              const timeData = groupedBadgeStats.filter(b => b.timeSpent > 0)
+              if (timeData.length === 0) {
+                return (
+                  <div className="h-[300px] flex items-center justify-center text-muted-foreground">
+                    <div className="text-center">
+                      <p className="text-lg">No time data yet</p>
+                      <p className="text-sm mt-2">Start reading emails to track time spent</p>
+                    </div>
+                  </div>
+                )
+              }
+              return (
+                <div className="flex flex-col">
+                  {/* Pie Chart - centered */}
+                  <div className="flex justify-center">
+                    <ResponsiveContainer width={200} height={200}>
+                      <PieChart>
+                        <Pie
+                          data={timeData.map(badge => ({
+                            name: badge.name,
+                            value: badge.timeSpent,
+                          }))}
+                          cx="50%"
+                          cy="50%"
+                          outerRadius={80}
+                          fill="#8884d8"
+                          dataKey="value"
+                          stroke="none"
+                          onMouseEnter={(_, index) => setActiveTimeIndex(index)}
+                          onMouseLeave={() => setActiveTimeIndex(null)}
+                        >
+                          {timeData.map((_, index) => (
+                            <Cell
+                              key={`cell-${index}`}
+                              fill={PIE_CHART_COLORS[index % PIE_CHART_COLORS.length]}
+                              opacity={activeTimeIndex === null || activeTimeIndex === index ? 1 : 0.4}
+                              style={{ transition: 'opacity 0.2s' }}
+                            />
+                          ))}
+                        </Pie>
+                        <Tooltip
+                          formatter={(value: any) => formatTime(value)}
+                          contentStyle={{
+                            backgroundColor: 'hsl(var(--card))',
+                            border: '1px solid hsl(var(--border))',
+                            borderRadius: '6px',
+                            padding: '6px 10px',
+                            fontSize: '12px',
+                          }}
+                          labelStyle={{ color: 'hsl(var(--foreground))' }}
+                          itemStyle={{ color: 'hsl(var(--foreground))' }}
+                        />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                  {/* Legend - horizontal grid below chart */}
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 mt-4 text-xs">
+                    {timeData.map((badge, index) => (
+                      <div
+                        key={badge.name}
+                        className={`flex items-center gap-2 px-2 py-1 rounded cursor-pointer transition-all ${
+                          activeTimeIndex === index ? 'bg-accent font-semibold' : 'hover:bg-accent/50'
+                        }`}
+                        onMouseEnter={() => setActiveTimeIndex(index)}
+                        onMouseLeave={() => setActiveTimeIndex(null)}
+                      >
+                        <div
+                          className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                          style={{ backgroundColor: PIE_CHART_COLORS[index % PIE_CHART_COLORS.length] }}
+                        />
+                        <span className="truncate text-foreground flex-1">{badge.name}</span>
+                        <span className="text-muted-foreground">{formatTime(badge.timeSpent)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )
+            })()}
           </div>
 
+          {/* Email Distribution */}
           <div className="bg-card border border-border rounded-lg p-6">
             <h2 className="text-lg font-semibold text-foreground mb-4">Email Distribution</h2>
             {groupedBadgeStats.length > 0 ? (
-              <ResponsiveContainer width="100%" height={300}>
-                <PieChart>
-                  <Pie
-                    data={groupedBadgeStats.map(badge => ({
-                      name: badge.name,
-                      value: badge.totalEmails,
-                    }))}
-                    cx="50%"
-                    cy="50%"
-                    labelLine={false}
-                    label={({ name, value }) => `${name}: ${value}`}
-                    outerRadius={100}
-                    fill="#8884d8"
-                    dataKey="value"
-                    fontSize={10}
-                  >
-                    {groupedBadgeStats.map((_, index) => (
-                      <Cell key={`cell-${index}`} fill={PIE_CHART_COLORS[index % PIE_CHART_COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip />
-                </PieChart>
-              </ResponsiveContainer>
+              <div className="flex flex-col">
+                {/* Pie Chart - centered */}
+                <div className="flex justify-center">
+                  <ResponsiveContainer width={200} height={200}>
+                    <PieChart>
+                      <Pie
+                        data={groupedBadgeStats.map(badge => ({
+                          name: badge.name,
+                          value: badge.totalEmails,
+                        }))}
+                        cx="50%"
+                        cy="50%"
+                        outerRadius={80}
+                        fill="#8884d8"
+                        dataKey="value"
+                        stroke="none"
+                        onMouseEnter={(_, index) => setActiveEmailIndex(index)}
+                        onMouseLeave={() => setActiveEmailIndex(null)}
+                      >
+                        {groupedBadgeStats.map((_, index) => (
+                          <Cell
+                            key={`cell-${index}`}
+                            fill={PIE_CHART_COLORS[index % PIE_CHART_COLORS.length]}
+                            opacity={activeEmailIndex === null || activeEmailIndex === index ? 1 : 0.4}
+                            style={{ transition: 'opacity 0.2s' }}
+                          />
+                        ))}
+                      </Pie>
+                      <Tooltip
+                        formatter={(value: any) => [`${value} emails`, 'Count']}
+                        contentStyle={{
+                          backgroundColor: 'hsl(var(--card))',
+                          border: '1px solid hsl(var(--border))',
+                          borderRadius: '6px',
+                          padding: '6px 10px',
+                          fontSize: '12px',
+                        }}
+                        labelStyle={{ color: 'hsl(var(--foreground))' }}
+                        itemStyle={{ color: 'hsl(var(--foreground))' }}
+                      />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+                {/* Legend - horizontal grid below chart */}
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1 mt-4 text-xs">
+                  {groupedBadgeStats.map((badge, index) => (
+                    <div
+                      key={badge.name}
+                      className={`flex items-center gap-2 px-2 py-1 rounded cursor-pointer transition-all ${
+                        activeEmailIndex === index ? 'bg-accent font-semibold' : 'hover:bg-accent/50'
+                      }`}
+                      onMouseEnter={() => setActiveEmailIndex(index)}
+                      onMouseLeave={() => setActiveEmailIndex(null)}
+                    >
+                      <div
+                        className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                        style={{ backgroundColor: PIE_CHART_COLORS[index % PIE_CHART_COLORS.length] }}
+                      />
+                      <span className="truncate text-foreground flex-1">{badge.name}</span>
+                      <span className="text-muted-foreground">{badge.totalEmails}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
             ) : (
               <div className="h-[300px] flex items-center justify-center text-muted-foreground">
                 <div className="text-center">

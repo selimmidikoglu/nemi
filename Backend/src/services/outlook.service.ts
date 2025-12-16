@@ -76,7 +76,7 @@ export class OutlookService {
           params: {
             $top: maxResults,
             $orderby: 'receivedDateTime desc',
-            $select: 'id,subject,from,toRecipients,receivedDateTime,isRead,hasAttachments,body'
+            $select: 'id,conversationId,subject,from,toRecipients,ccRecipients,receivedDateTime,isRead,hasAttachments,body,bodyPreview,internetMessageHeaders'
           }
         }
       );
@@ -90,11 +90,117 @@ export class OutlookService {
   }
 
   /**
+   * Fetch specific emails by IDs (for push notification handling)
+   */
+  async fetchEmailsByIds(messageIds: string[]): Promise<any[]> {
+    const emails: any[] = [];
+
+    for (const messageId of messageIds) {
+      try {
+        const response = await axios.get(
+          `${this.baseUrl}/me/messages/${messageId}`,
+          {
+            headers: {
+              Authorization: `Bearer ${this.accessToken}`
+            },
+            params: {
+              $select: 'id,conversationId,subject,from,toRecipients,ccRecipients,receivedDateTime,isRead,hasAttachments,body,bodyPreview,internetMessageHeaders'
+            }
+          }
+        );
+        emails.push(this.parseOutlookMessage(response.data));
+      } catch (error: any) {
+        logger.error(`Failed to fetch Outlook message ${messageId}:`, error.message);
+      }
+    }
+
+    return emails;
+  }
+
+  /**
+   * Move email to trash
+   */
+  async trashEmail(messageId: string): Promise<void> {
+    try {
+      await axios.post(
+        `${this.baseUrl}/me/messages/${messageId}/move`,
+        { destinationId: 'deleteditems' },
+        {
+          headers: {
+            Authorization: `Bearer ${this.accessToken}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      logger.info(`Moved Outlook message ${messageId} to trash`);
+    } catch (error: any) {
+      logger.error(`Failed to trash Outlook message ${messageId}:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Archive email (move to archive folder)
+   */
+  async archiveEmail(messageId: string): Promise<void> {
+    try {
+      await axios.post(
+        `${this.baseUrl}/me/messages/${messageId}/move`,
+        { destinationId: 'archive' },
+        {
+          headers: {
+            Authorization: `Bearer ${this.accessToken}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      logger.info(`Archived Outlook message ${messageId}`);
+    } catch (error: any) {
+      logger.error(`Failed to archive Outlook message ${messageId}:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
    * Parse Outlook message into standardized format
    */
   private parseOutlookMessage(message: any): any {
+    // Extract unsubscribe info from headers
+    let unsubscribeUrl: string | undefined;
+    let unsubscribeEmail: string | undefined;
+
+    if (message.internetMessageHeaders) {
+      const unsubHeader = message.internetMessageHeaders.find(
+        (h: any) => h.name.toLowerCase() === 'list-unsubscribe'
+      );
+      if (unsubHeader) {
+        const urlMatch = unsubHeader.value.match(/<(https?:\/\/[^>]+)>/i);
+        const emailMatch = unsubHeader.value.match(/<mailto:([^>?]+)/i);
+        unsubscribeUrl = urlMatch?.[1];
+        unsubscribeEmail = emailMatch?.[1];
+      }
+    }
+
+    // Parse body - Outlook may return HTML or text
+    let body = '';
+    let htmlBody: string | undefined;
+    let textBody = '';
+
+    if (message.body) {
+      if (message.body.contentType === 'html') {
+        htmlBody = message.body.content || '';
+        // Strip HTML for plain text
+        textBody = htmlBody.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+        body = textBody;
+      } else {
+        textBody = message.body.content || '';
+        body = textBody;
+      }
+    }
+
     return {
       messageId: message.id,
+      conversationId: message.conversationId || null,
       from: {
         email: message.from?.emailAddress?.address || '',
         name: message.from?.emailAddress?.name || ''
@@ -103,14 +209,21 @@ export class OutlookService {
         email: r.emailAddress?.address || '',
         name: r.emailAddress?.name || ''
       })) || [],
+      cc: message.ccRecipients?.map((r: any) => ({
+        email: r.emailAddress?.address || '',
+        name: r.emailAddress?.name || ''
+      })) || [],
       subject: message.subject || '(No Subject)',
-      body: message.body?.content || '',
-      htmlBody: message.body?.contentType === 'html' ? message.body?.content : undefined,
+      body,
+      textBody,
+      htmlBody,
       date: new Date(message.receivedDateTime),
       isRead: message.isRead,
       hasAttachments: message.hasAttachments || false,
       uid: message.id,
-      providerType: 'outlook'
+      providerType: 'outlook',
+      unsubscribeUrl,
+      unsubscribeEmail
     };
   }
 

@@ -5,6 +5,9 @@
   "main": "dist/server.js",
   "scripts": {
     "dev": "nodemon --exec ts-node src/server.ts",
+    "dev:full": "cd .. && docker compose up -d postgres elasticsearch && cd Backend && npm run dev",
+    "docker:up": "cd .. && docker compose up -d postgres elasticsearch",
+    "docker:down": "cd .. && docker compose down",
     "build": "tsc",
     "start": "node dist/server.js",
     "migrate": "ts-node src/database/migrate.ts",
@@ -23,6 +26,7 @@
   "author": "NemiAI",
   "license": "UNLICENSED",
   "dependencies": {
+    "@elastic/elasticsearch": "^8.11.0",
     "@google-cloud/pubsub": "^5.2.0",
     "@ngrok/ngrok": "^1.6.0",
     "apn": "^2.2.0",

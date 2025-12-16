@@ -1,21 +1,29 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { Star, Paperclip, ChevronRight, AtSign, Trash2, CheckSquare, Square } from "lucide-react";
+import { Star, Paperclip, ChevronRight, AtSign, Trash2, CheckSquare, Square, Archive, ArchiveRestore, Clock, AlarmClockOff, MailX } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { Email } from "@/types";
 import Image from "next/image";
 import EmailHtmlCard from "./EmailHtmlCard";
 import { formatDistanceToNow, format, isToday, isYesterday, differenceInHours } from "date-fns";
+import { useTheme } from "next-themes";
 
 interface EmailListProps {
   emails: Email[];
-  selectedEmailId: number | null;
+  selectedEmailId: string | null;
   onSelectEmail: (email: Email) => void;
-  onToggleStar: (id: number, isStarred: boolean) => void;
-  onDeleteEmails?: (ids: number[]) => Promise<void>;
-  viewMode: "compact" | "detailed";
+  onToggleStar: (id: string, isStarred: boolean) => void;
+  onDeleteEmails?: (ids: string[]) => Promise<void>;
+  onArchiveEmail?: (id: string) => Promise<void>;
+  onUnarchiveEmail?: (id: string) => Promise<void>;  // For unarchiving from archived view
+  onSnoozeEmail?: (id: string, snoozeUntil: Date) => Promise<void>;
+  onUnsnoozeEmail?: (id: string) => Promise<void>;
+  onUnsubscribe?: (id: string) => Promise<void>;
+  onHtmlCardLinkClick?: (emailId: string, url: string) => void;  // Track link clicks from HTML cards
+  viewMode: "compact" | "detailed" | "minimal";
+  isArchivedView?: boolean;  // When true, show unarchive instead of archive button
 }
 
 // Generate Gravatar URL from email address using MD5 hash
@@ -132,6 +140,44 @@ const md5 = (str: string): string => {
   return wordToHex(a) + wordToHex(b) + wordToHex(c) + wordToHex(d);
 };
 
+// Check if we should show company logo (trust backend validation)
+const shouldShowCompanyLogo = (companyName: string | null | undefined): boolean => {
+  // If we have a company name from the backend, trust it
+  // The backend already validated this when saving the email
+  return !!companyName;
+};
+
+// Parse sender string (e.g., "Name <email@example.com>" or just "email@example.com")
+const parseSender = (fromField: string | { name?: string; email?: string } | undefined): { name: string; email: string } => {
+  if (!fromField) {
+    return { name: 'Unknown', email: '' };
+  }
+
+  // If it's an object with name/email
+  if (typeof fromField === 'object') {
+    return {
+      name: fromField.name || fromField.email || 'Unknown',
+      email: fromField.email || ''
+    };
+  }
+
+  // If it's a string, parse "Name <email>" format
+  const fromString = String(fromField);
+  const match = fromString.match(/^(.+?)\s*<(.+?)>$/);
+  if (match) {
+    return {
+      name: match[1].trim(),
+      email: match[2].trim()
+    };
+  }
+
+  // Just an email address
+  return {
+    name: fromString,
+    email: fromString
+  };
+};
+
 // Get initials from name or email
 const getInitials = (name: string, email: string): string => {
   if (name && name.trim()) {
@@ -180,22 +226,35 @@ const getBadgeStyle = (color: string) => {
   };
 };
 
-// Helper to format email date (combined format)
+// Filter out non-meaningful badges (importance levels and generic categories)
+const filterMeaningfulBadges = (badges: any[] | undefined, companyName?: string | null) => {
+  if (!badges) return [];
+  const excludedNames = ['low', 'normal', 'high', 'critical', 'other', 'general', 'misc'];
+  return badges.filter((b: any) => {
+    const name = b.name?.toLowerCase() || '';
+    return !excludedNames.includes(name) && b.name !== companyName;
+  });
+};
+
+// Helper to format email date (clean format without "about" or "ago")
 const formatEmailDate = (dateString: string): string => {
   const date = new Date(dateString);
-  const hoursAgo = differenceInHours(new Date(), date);
+  const now = new Date();
+  const hoursAgo = differenceInHours(now, date);
 
-  // Less than 24 hours: show relative time
-  if (hoursAgo < 24) {
-    return formatDistanceToNow(date, { addSuffix: true });
-  }
-
-  // More than 24 hours: show short date
+  // Today: show time
   if (isToday(date)) {
     return format(date, "h:mm a");
   }
+
+  // Yesterday
   if (isYesterday(date)) {
     return "Yesterday";
+  }
+
+  // Less than 7 days ago: show day name
+  if (hoursAgo < 168) { // 7 days * 24 hours
+    return format(date, "EEE"); // Mon, Tue, etc.
   }
 
   // Older: show short date format
@@ -230,7 +289,8 @@ const groupEmailsIntoThreads = (emails: Email[]): Map<string, Email[]> => {
   return threads;
 };
 
-// Sender Avatar component: Profile Photo -> Gravatar -> Company Logo -> Initials
+// Sender Avatar component: Profile Photo -> Company Logo -> Initials
+// Gravatar removed as it causes too many failed requests
 const SenderAvatar = ({
   email,
   name,
@@ -247,11 +307,16 @@ const SenderAvatar = ({
   senderProfilePhotoUrl?: string | null;
 }) => {
   const [profilePhotoError, setProfilePhotoError] = useState(false);
-  const [gravatarError, setGravatarError] = useState(false);
   const [companyLogoError, setCompanyLogoError] = useState(false);
+
+  // Reset error states when props change
+  useEffect(() => {
+    setProfilePhotoError(false);
+    setCompanyLogoError(false);
+  }, [email, senderProfilePhotoUrl, companyLogoUrl]);
+
   const initials = getInitials(name, email);
   const bgColor = getAvatarColor(email);
-  const gravatarUrl = getGravatarUrl(email, size * 2); // 2x for retina
 
   // Priority 1: Try Google People API profile photo (real profile picture)
   if (senderProfilePhotoUrl && !profilePhotoError) {
@@ -268,21 +333,7 @@ const SenderAvatar = ({
     );
   }
 
-  // Priority 2: Try Gravatar
-  if (!gravatarError) {
-    return (
-      <img
-        src={gravatarUrl}
-        alt={name || email}
-        className="rounded-full object-cover flex-shrink-0"
-        style={{ width: size, height: size }}
-        onError={() => setGravatarError(true)}
-        title={name || email}
-      />
-    );
-  }
-
-  // Priority 3: Try Company Logo
+  // Priority 2: Try Company Logo
   if (companyLogoUrl && !companyLogoError) {
     return (
       <Image
@@ -297,7 +348,7 @@ const SenderAvatar = ({
     );
   }
 
-  // Priority 4: Show initials fallback
+  // Priority 3: Show initials fallback (based on email address for unique colors)
   return (
     <div
       className="rounded-full flex items-center justify-center text-white font-semibold flex-shrink-0"
@@ -314,12 +365,15 @@ const SenderAvatar = ({
   );
 };
 
-export default function EmailList({ emails, selectedEmailId, onSelectEmail, onToggleStar, onDeleteEmails, viewMode }: EmailListProps) {
-  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+export default function EmailList({ emails, selectedEmailId, onSelectEmail, onToggleStar, onDeleteEmails, onArchiveEmail, onUnarchiveEmail, onSnoozeEmail, onUnsnoozeEmail, onUnsubscribe, onHtmlCardLinkClick, viewMode, isArchivedView }: EmailListProps) {
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isDeleting, setIsDeleting] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [isCompactWidth, setIsCompactWidth] = useState(false);
+  const [hoveredEmailId, setHoveredEmailId] = useState<string | null>(null);
+  const [showSnoozeMenu, setShowSnoozeMenu] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const { resolvedTheme } = useTheme();
 
   // Use ResizeObserver to detect container width and switch to compact mode
   useEffect(() => {
@@ -337,7 +391,7 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
     return () => observer.disconnect();
   }, []);
 
-  const toggleSelection = (id: number, e: React.MouseEvent) => {
+  const toggleSelection = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     const newSelected = new Set(selectedIds);
     if (newSelected.has(id)) {
@@ -394,6 +448,294 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
     return dateB - dateA; // Newest first
   });
 
+  // Snooze time options
+  const getSnoozeOptions = () => {
+    const now = new Date();
+    const laterToday = new Date(now);
+    laterToday.setHours(18, 0, 0, 0); // 6 PM today
+
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    tomorrow.setHours(9, 0, 0, 0); // 9 AM tomorrow
+
+    const nextWeek = new Date(now);
+    nextWeek.setDate(nextWeek.getDate() + 7);
+    nextWeek.setHours(9, 0, 0, 0); // 9 AM next week
+
+    return [
+      { label: "Later today", time: laterToday, show: now.getHours() < 17 },
+      { label: "Tomorrow", time: tomorrow, show: true },
+      { label: "Next week", time: nextWeek, show: true },
+    ].filter(opt => opt.show);
+  };
+
+  // Handle hover action clicks
+  const handleQuickDelete = async (e: React.MouseEvent, emailId: string) => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (onDeleteEmails) {
+      await onDeleteEmails([emailId]);
+    }
+  };
+
+  const handleQuickArchive = async (e: React.MouseEvent, emailId: string) => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (onArchiveEmail) {
+      await onArchiveEmail(emailId);
+    }
+  };
+
+  const handleQuickUnarchive = async (e: React.MouseEvent, emailId: string) => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (onUnarchiveEmail) {
+      await onUnarchiveEmail(emailId);
+    }
+  };
+
+  const handleQuickSnooze = async (e: React.MouseEvent, emailId: string, snoozeUntil: Date) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setShowSnoozeMenu(null);
+    if (onSnoozeEmail) {
+      await onSnoozeEmail(emailId, snoozeUntil);
+    }
+  };
+
+  const handleQuickUnsnooze = async (e: React.MouseEvent, emailId: string) => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (onUnsnoozeEmail) {
+      await onUnsnoozeEmail(emailId);
+    }
+  };
+
+  const handleQuickUnsubscribe = async (e: React.MouseEvent, emailId: string) => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (onUnsubscribe) {
+      await onUnsubscribe(emailId);
+    }
+  };
+
+  // Hover Actions Component - Responsive: top-center on large screens, right side on small screens
+  const HoverActions = ({ emailId, hasUnsubscribe, isRead, isSnoozed }: { emailId: string; hasUnsubscribe?: boolean; isRead?: boolean; isSnoozed?: boolean }) => {
+    const isDark = resolvedTheme === 'dark';
+
+    // Vertical gradient for large screens (coming from top)
+    const getVerticalGradient = () => {
+      if (isDark) {
+        return !isRead
+          ? 'linear-gradient(to bottom, rgba(23, 37, 84, 0.95) 0%, rgba(23, 37, 84, 0.7) 70%, transparent 100%)'
+          : 'linear-gradient(to bottom, rgba(17, 24, 39, 0.95) 0%, rgba(17, 24, 39, 0.7) 70%, transparent 100%)';
+      }
+      return !isRead
+        ? 'linear-gradient(to bottom, rgba(239, 246, 255, 0.95) 0%, rgba(239, 246, 255, 0.7) 70%, transparent 100%)'
+        : 'linear-gradient(to bottom, rgba(255, 255, 255, 0.95) 0%, rgba(255, 255, 255, 0.7) 70%, transparent 100%)';
+    };
+
+    // Horizontal gradient for small screens (coming from right)
+    const getHorizontalGradient = () => {
+      if (isDark) {
+        return !isRead
+          ? 'linear-gradient(to right, transparent 0%, rgba(23, 37, 84, 0.97) 25%)'
+          : 'linear-gradient(to right, transparent 0%, rgba(17, 24, 39, 0.97) 25%)';
+      }
+      return !isRead
+        ? 'linear-gradient(to right, transparent 0%, rgba(239, 246, 255, 0.97) 25%)'
+        : 'linear-gradient(to right, transparent 0%, rgba(255, 255, 255, 0.97) 25%)';
+    };
+
+    const isHovered = hoveredEmailId === emailId;
+
+    return (
+      <>
+        {/* Large screen version - Top center dropdown */}
+        <div
+          className={cn(
+            "hidden lg:flex absolute left-1/2 -translate-x-1/2 top-0 items-center gap-1 px-3 py-2 rounded-b-xl transition-all duration-500 ease-out z-10",
+            isHovered ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-full pointer-events-none"
+          )}
+          style={{ background: getVerticalGradient() }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Archive / Unarchive */}
+          {isArchivedView && onUnarchiveEmail ? (
+            <button
+              onClick={(e) => handleQuickUnarchive(e, emailId)}
+              className="p-2 rounded-full hover:bg-green-100 dark:hover:bg-green-900/30 text-muted-foreground hover:text-green-600 transition-all duration-150 hover:scale-110"
+              title="Unarchive"
+            >
+              <ArchiveRestore className="w-[18px] h-[18px]" />
+            </button>
+          ) : onArchiveEmail && (
+            <button
+              onClick={(e) => handleQuickArchive(e, emailId)}
+              className="p-2 rounded-full hover:bg-black/10 dark:hover:bg-white/10 text-muted-foreground hover:text-foreground transition-all duration-150 hover:scale-110"
+              title="Archive"
+            >
+              <Archive className="w-[18px] h-[18px]" />
+            </button>
+          )}
+
+          {/* Snooze / Unsnooze */}
+          {isSnoozed && onUnsnoozeEmail ? (
+            <button
+              onClick={(e) => handleQuickUnsnooze(e, emailId)}
+              className="p-2 rounded-full hover:bg-orange-100 dark:hover:bg-orange-900/30 text-orange-500 hover:text-orange-600 transition-all duration-150 hover:scale-110"
+              title="Unsnooze"
+            >
+              <AlarmClockOff className="w-[18px] h-[18px]" />
+            </button>
+          ) : onSnoozeEmail && (
+            <div className="relative">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  setShowSnoozeMenu(showSnoozeMenu === emailId ? null : emailId);
+                }}
+                className="p-2 rounded-full hover:bg-black/10 dark:hover:bg-white/10 text-muted-foreground hover:text-foreground transition-all duration-150 hover:scale-110"
+                title="Snooze"
+              >
+                <Clock className="w-[18px] h-[18px]" />
+              </button>
+
+              {/* Snooze dropdown */}
+              {showSnoozeMenu === emailId && (
+                <div className="absolute left-1/2 -translate-x-1/2 top-full mt-1 bg-card border border-border rounded-lg shadow-xl z-50 py-1 min-w-[140px]">
+                  {getSnoozeOptions().map((option) => (
+                    <button
+                      key={option.label}
+                      onClick={(e) => handleQuickSnooze(e, emailId, option.time)}
+                      className="w-full px-3 py-1.5 text-left text-sm hover:bg-accent transition-colors"
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Unsubscribe */}
+          {onUnsubscribe && hasUnsubscribe && (
+            <button
+              onClick={(e) => handleQuickUnsubscribe(e, emailId)}
+              className="p-2 rounded-full hover:bg-orange-100 dark:hover:bg-orange-900/30 text-muted-foreground hover:text-orange-500 transition-all duration-150 hover:scale-110"
+              title="Unsubscribe"
+            >
+              <MailX className="w-[18px] h-[18px]" />
+            </button>
+          )}
+
+          {/* Delete */}
+          {onDeleteEmails && (
+            <button
+              onClick={(e) => handleQuickDelete(e, emailId)}
+              className="p-2 rounded-full hover:bg-red-100 dark:hover:bg-red-900/30 text-muted-foreground hover:text-red-500 transition-all duration-150 hover:scale-110"
+              title="Delete"
+            >
+              <Trash2 className="w-[18px] h-[18px]" />
+            </button>
+          )}
+        </div>
+
+        {/* Small screen version - Right side slide */}
+        <div
+          className={cn(
+            "lg:hidden absolute right-0 top-0 bottom-0 flex items-center gap-0.5 pr-3 pl-10 transition-all duration-500 ease-out z-10",
+            isHovered ? "opacity-100 translate-x-0" : "opacity-0 translate-x-10 pointer-events-none"
+          )}
+          style={{ background: getHorizontalGradient() }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Archive / Unarchive */}
+          {isArchivedView && onUnarchiveEmail ? (
+            <button
+              onClick={(e) => handleQuickUnarchive(e, emailId)}
+              className="p-2 rounded-full hover:bg-green-100 dark:hover:bg-green-900/30 text-muted-foreground hover:text-green-600 transition-all duration-150 hover:scale-110"
+              title="Unarchive"
+            >
+              <ArchiveRestore className="w-[18px] h-[18px]" />
+            </button>
+          ) : onArchiveEmail && (
+            <button
+              onClick={(e) => handleQuickArchive(e, emailId)}
+              className="p-2 rounded-full hover:bg-black/10 dark:hover:bg-white/10 text-muted-foreground hover:text-foreground transition-all duration-150 hover:scale-110"
+              title="Archive"
+            >
+              <Archive className="w-[18px] h-[18px]" />
+            </button>
+          )}
+
+          {/* Snooze / Unsnooze */}
+          {isSnoozed && onUnsnoozeEmail ? (
+            <button
+              onClick={(e) => handleQuickUnsnooze(e, emailId)}
+              className="p-2 rounded-full hover:bg-orange-100 dark:hover:bg-orange-900/30 text-orange-500 hover:text-orange-600 transition-all duration-150 hover:scale-110"
+              title="Unsnooze"
+            >
+              <AlarmClockOff className="w-[18px] h-[18px]" />
+            </button>
+          ) : onSnoozeEmail && (
+            <div className="relative">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  setShowSnoozeMenu(showSnoozeMenu === emailId ? null : emailId);
+                }}
+                className="p-2 rounded-full hover:bg-black/10 dark:hover:bg-white/10 text-muted-foreground hover:text-foreground transition-all duration-150 hover:scale-110"
+                title="Snooze"
+              >
+                <Clock className="w-[18px] h-[18px]" />
+              </button>
+
+              {/* Snooze dropdown */}
+              {showSnoozeMenu === emailId && (
+                <div className="absolute right-0 top-full mt-1 bg-card border border-border rounded-lg shadow-xl z-50 py-1 min-w-[140px]">
+                  {getSnoozeOptions().map((option) => (
+                    <button
+                      key={option.label}
+                      onClick={(e) => handleQuickSnooze(e, emailId, option.time)}
+                      className="w-full px-3 py-1.5 text-left text-sm hover:bg-accent transition-colors"
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Unsubscribe */}
+          {onUnsubscribe && hasUnsubscribe && (
+            <button
+              onClick={(e) => handleQuickUnsubscribe(e, emailId)}
+              className="p-2 rounded-full hover:bg-orange-100 dark:hover:bg-orange-900/30 text-muted-foreground hover:text-orange-500 transition-all duration-150 hover:scale-110"
+              title="Unsubscribe"
+            >
+              <MailX className="w-[18px] h-[18px]" />
+            </button>
+          )}
+
+          {/* Delete */}
+          {onDeleteEmails && (
+            <button
+              onClick={(e) => handleQuickDelete(e, emailId)}
+              className="p-2 rounded-full hover:bg-red-100 dark:hover:bg-red-900/30 text-muted-foreground hover:text-red-500 transition-all duration-150 hover:scale-110"
+              title="Delete"
+            >
+              <Trash2 className="w-[18px] h-[18px]" />
+            </button>
+          )}
+        </div>
+      </>
+    );
+  };
+
   return (
     <div ref={containerRef} className="flex-1 overflow-y-auto overflow-x-hidden">
       {/* Bulk Actions Toolbar */}
@@ -422,19 +764,239 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
           const mainEmail = threadEmails[0]; // Newest email in thread
           const previousEmails = threadEmails.slice(1); // Older emails in thread
 
-          const fromText =
-            typeof mainEmail.from === "string" ? mainEmail.from : (mainEmail.from as any)?.name || (mainEmail.from as any)?.email || "Unknown";
-          const emailAddress = typeof mainEmail.from === "string" ? mainEmail.from : (mainEmail.from as any)?.email || "";
+          // Parse sender info properly (handles "Name <email>" format)
+          const sender = parseSender(mainEmail.from);
+          const fromText = sender.name;
+          const emailAddress = sender.email;
+
+          // Only use company info if it actually matches the sender's domain
+          const companyMatches = shouldShowCompanyLogo(mainEmail.companyName);
+          const validCompanyName = companyMatches ? mainEmail.companyName : null;
+          const validCompanyLogo = companyMatches ? mainEmail.companyLogoUrl : null;
 
           return (
             <div key={`thread-${mainEmail.id}`} className="w-full">
-              {viewMode === "compact" ? (
+              {viewMode === "minimal" ? (
+                /* MINIMAL VIEW - Clean one-liner with HTML summary content */
+                (() => {
+                  // Parse HTML snippet to extract emoji, title, description, button, and button color
+                  let htmlEmoji: string | null = null;
+                  let htmlTitle: string | null = null;
+                  let htmlDescription: string | null = null;
+                  let htmlButtonText: string | null = null;
+                  let htmlButtonUrl: string | null = null;
+                  let htmlButtonColor: string | null = null;
+
+                  // Tailwind color class to hex mapping (from AI-generated HTML)
+                  const tailwindColorMap: Record<string, string> = {
+                    'bg-blue-500': '#3b82f6', 'bg-blue-600': '#2563eb', 'bg-blue-700': '#1d4ed8',
+                    'bg-indigo-500': '#6366f1', 'bg-indigo-600': '#4f46e5', 'bg-indigo-700': '#4338ca',
+                    'bg-purple-500': '#a855f7', 'bg-purple-600': '#9333ea', 'bg-purple-700': '#7e22ce',
+                    'bg-green-500': '#22c55e', 'bg-green-600': '#16a34a', 'bg-green-700': '#15803d',
+                    'bg-red-500': '#ef4444', 'bg-red-600': '#dc2626', 'bg-red-700': '#b91c1c',
+                    'bg-amber-500': '#f59e0b', 'bg-amber-600': '#d97706', 'bg-amber-700': '#b45309',
+                    'bg-orange-500': '#f97316', 'bg-orange-600': '#ea580c', 'bg-orange-700': '#c2410c',
+                    'bg-pink-500': '#ec4899', 'bg-pink-600': '#db2777', 'bg-pink-700': '#be185d',
+                    'bg-sky-500': '#0ea5e9', 'bg-sky-600': '#0284c7',
+                    'bg-teal-500': '#14b8a6', 'bg-teal-600': '#0d9488',
+                    'bg-cyan-500': '#06b6d4', 'bg-cyan-600': '#0891b2',
+                    'bg-emerald-500': '#10b981', 'bg-emerald-600': '#059669',
+                    'bg-rose-500': '#f43f5e', 'bg-rose-600': '#e11d48',
+                    'bg-violet-500': '#8b5cf6', 'bg-violet-600': '#7c3aed',
+                    'bg-fuchsia-500': '#d946ef', 'bg-fuchsia-600': '#c026d3',
+                    'bg-gray-600': '#4b5563', 'bg-gray-700': '#374151', 'bg-gray-800': '#1f2937',
+                  };
+
+                  if (mainEmail.renderAsHtml && mainEmail.htmlSnippet) {
+                    // Extract emoji from span with text-lg class (e.g., <span class="text-lg">📰</span>)
+                    const emojiMatch = mainEmail.htmlSnippet.match(/<span[^>]*class="[^"]*text-lg[^"]*"[^>]*>([^<]+)<\/span>/i);
+                    if (emojiMatch) htmlEmoji = emojiMatch[1].trim();
+
+                    // Extract all p tags - first one is usually title, second is description
+                    const pMatches = mainEmail.htmlSnippet.match(/<p[^>]*>([^<]+)<\/p>/gi);
+                    if (pMatches && pMatches.length > 0) {
+                      // First p tag is the title
+                      const titleContent = pMatches[0].match(/<p[^>]*>([^<]+)<\/p>/i);
+                      if (titleContent) htmlTitle = titleContent[1].trim();
+
+                      // Second p tag is the description (if exists)
+                      if (pMatches.length > 1) {
+                        const descContent = pMatches[1].match(/<p[^>]*>([^<]+)<\/p>/i);
+                        if (descContent) htmlDescription = descContent[1].trim();
+                      }
+                    }
+
+                    // Extract button/link text, URL, and color (prioritize <a> tags with href)
+                    const linkMatch = mainEmail.htmlSnippet.match(/<a[^>]+href="([^"]+)"([^>]*)>([^<]+)<\/a>/i);
+                    if (linkMatch) {
+                      htmlButtonUrl = linkMatch[1];
+                      const linkAttributes = linkMatch[2];
+                      htmlButtonText = linkMatch[3].trim();
+
+                      // Extract bg-color class from the link's class attribute
+                      const classMatch = linkAttributes.match(/class="([^"]*)"/i);
+                      if (classMatch) {
+                        const classes = classMatch[1];
+                        // Find bg-{color}-{shade} pattern
+                        const bgColorMatch = classes.match(/bg-[a-z]+-\d{3}/);
+                        if (bgColorMatch && tailwindColorMap[bgColorMatch[0]]) {
+                          htmlButtonColor = tailwindColorMap[bgColorMatch[0]];
+                        }
+                      }
+                    } else {
+                      // Fallback: look for span with bg- and px- classes (badge-style button)
+                      const badgeMatch = mainEmail.htmlSnippet.match(/<span[^>]*class="([^"]*(?:px-\d|bg-)[^"]*)"[^>]*>([^<]+)<\/span>/i);
+                      if (badgeMatch && !badgeMatch[2].match(/^[\u{1F300}-\u{1F9FF}]/u)) {
+                        // Only use if it's not just an emoji
+                        htmlButtonText = badgeMatch[2].trim();
+                        const classes = badgeMatch[1];
+                        const bgColorMatch = classes.match(/bg-[a-z]+-\d{3}/);
+                        if (bgColorMatch && tailwindColorMap[bgColorMatch[0]]) {
+                          htmlButtonColor = tailwindColorMap[bgColorMatch[0]];
+                        }
+                      }
+                    }
+                  }
+
+                  return (
+                    <div
+                      className="relative group"
+                      onMouseEnter={() => setHoveredEmailId(mainEmail.id)}
+                      onMouseLeave={() => {
+                        setHoveredEmailId(null);
+                        setShowSnoozeMenu(null);
+                      }}
+                    >
+                      <button
+                        onClick={() => onSelectEmail(mainEmail)}
+                        className={cn(
+                          "flex w-full items-center gap-3 px-4 py-2 text-left transition-all duration-200",
+                          mainEmail.isRead ? "bg-white dark:bg-gray-900" : "bg-blue-50 dark:bg-blue-950/40",
+                          selectedIds.has(mainEmail.id) && "bg-primary/10",
+                          "hover:bg-accent/50"
+                        )}
+                      >
+                        {/* Sender Avatar/Company Logo - same as compact view */}
+                        <div className="flex-shrink-0">
+                          <SenderAvatar
+                            key={`avatar-minimal-${mainEmail.id}-${emailAddress}`}
+                            email={emailAddress}
+                            name={fromText}
+                            size={28}
+                            companyLogoUrl={validCompanyLogo}
+                            companyName={validCompanyName}
+                            senderProfilePhotoUrl={mainEmail.senderProfilePhotoUrl}
+                          />
+                        </div>
+
+                        {/* Sender Name - Fixed width */}
+                        <div className="flex-shrink-0 w-32 min-w-0">
+                          <span className={cn(
+                            "text-sm truncate block",
+                            mainEmail.isRead ? "text-muted-foreground font-normal" : "text-foreground font-semibold"
+                          )}>
+                            {fromText}
+                          </span>
+                        </div>
+
+                        {/* Content area: Gmail-style Subject - Preview */}
+                        <div className="flex-1 min-w-0 flex items-center gap-1.5">
+                          {/* Emoji from HTML - only for rich emails */}
+                          {htmlEmoji && (
+                            <span className="flex-shrink-0 text-sm">{htmlEmoji}</span>
+                          )}
+
+                          {/* Subject - primary text */}
+                          <span className={cn(
+                            "text-sm truncate flex-shrink-0 max-w-[280px]",
+                            mainEmail.isRead ? "text-muted-foreground/80 font-normal" : "text-foreground font-semibold"
+                          )}>
+                            {htmlTitle || mainEmail.subject || "No subject"}
+                          </span>
+
+                          {/* Body preview - Gmail uses dash separator */}
+                          {(htmlDescription || mainEmail.summary || mainEmail.body) && (
+                            <>
+                              <span className="text-muted-foreground/40 flex-shrink-0">–</span>
+                              <span className="text-sm text-muted-foreground truncate flex-1">
+                                {htmlDescription || mainEmail.summary || (typeof mainEmail.body === "string" ? mainEmail.body.replace(/\s+/g, ' ').substring(0, 100) : "")}
+                              </span>
+                            </>
+                          )}
+                        </div>
+
+                        {/* CTA Button - if available from HTML */}
+                        {htmlButtonText && (
+                          htmlButtonUrl ? (
+                            <a
+                              href={htmlButtonUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onHtmlCardLinkClick?.(mainEmail.id, htmlButtonUrl!);
+                              }}
+                              className="flex-shrink-0 px-2.5 py-1 text-xs font-medium bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
+                            >
+                              {htmlButtonText.length > 12 ? htmlButtonText.substring(0, 12) + '...' : htmlButtonText}
+                            </a>
+                          ) : (
+                            <span className="flex-shrink-0 px-2 py-0.5 text-[10px] font-medium bg-muted text-muted-foreground rounded">
+                              {htmlButtonText.length > 15 ? htmlButtonText.substring(0, 15) + '...' : htmlButtonText}
+                            </span>
+                          )
+                        )}
+
+                        {/* Star - appears on hover or if starred */}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onToggleStar(mainEmail.id, !mainEmail.isStarred);
+                          }}
+                          className={cn(
+                            "flex-shrink-0 p-1 rounded-full transition-all duration-200",
+                            hoveredEmailId === mainEmail.id || mainEmail.isStarred
+                              ? "opacity-100"
+                              : "opacity-0",
+                            mainEmail.isStarred
+                              ? "text-yellow-500"
+                              : "text-muted-foreground hover:text-yellow-500"
+                          )}
+                        >
+                          <Star className={cn("w-4 h-4", mainEmail.isStarred && "fill-current")} />
+                        </button>
+
+                        {/* Date */}
+                        <div className="flex-shrink-0 text-xs text-muted-foreground w-14 text-right">
+                          {formatEmailDate(mainEmail.date || mainEmail.createdAt)}
+                        </div>
+
+                        {/* Arrow button - appears on hover */}
+                        <div className={cn(
+                          "flex-shrink-0 transition-opacity duration-200",
+                          hoveredEmailId === mainEmail.id ? "opacity-100" : "opacity-0"
+                        )}>
+                          <ChevronRight className="w-4 h-4 text-muted-foreground" />
+                        </div>
+                      </button>
+                    </div>
+                  );
+                })()
+              ) : viewMode === "compact" ? (
                 /* COMPACT VIEW - ONE LINER */
+                <div
+                  className="relative"
+                  onMouseEnter={() => setHoveredEmailId(mainEmail.id)}
+                  onMouseLeave={() => {
+                    setHoveredEmailId(null);
+                    setShowSnoozeMenu(null);
+                  }}
+                >
                 <button
                   onClick={() => onSelectEmail(mainEmail)}
                   className={cn(
-                    "flex w-full items-center gap-3 px-4 py-2 text-left transition-all duration-200 relative overflow-hidden",
-                    mainEmail.isRead ? "bg-white dark:bg-gray-900" : "bg-blue-50 dark:bg-blue-950/30",
+                    "flex w-full items-center gap-3 px-4 py-1.5 text-left transition-all duration-200 relative overflow-visible",
+                    mainEmail.isRead ? "bg-white dark:bg-gray-900" : "bg-blue-50 dark:bg-blue-950/40",
                     selectedIds.has(mainEmail.id) && "bg-primary/10",
                     "hover:shadow-[inset_4px_0_0_0_hsl(var(--primary)),0_4px_6px_-1px_rgb(0_0_0_/0.1),0_2px_4px_-2px_rgb(0_0_0_/0.1)]"
                   )}
@@ -445,17 +1007,38 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
                     title={mainEmail.isRead ? "Read" : "Unread"}
                   />
 
-                  {/* Sender Avatar (Profile Photo -> Gravatar -> Company Logo -> Initials) */}
+                  {/* Sender Avatar (Profile Photo -> Company Logo -> Initials) */}
                   <div className="flex-shrink-0 ml-2">
                     <SenderAvatar
+                      key={`avatar-${mainEmail.id}-${emailAddress}`}
                       email={emailAddress}
                       name={fromText}
                       size={28}
-                      companyLogoUrl={mainEmail.companyLogoUrl}
-                      companyName={mainEmail.companyName}
+                      companyLogoUrl={validCompanyLogo}
+                      companyName={validCompanyName}
                       senderProfilePhotoUrl={mainEmail.senderProfilePhotoUrl}
                     />
                   </div>
+
+                  {/* Star icon - bottom left corner of the row */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onToggleStar(mainEmail.id, !mainEmail.isStarred);
+                    }}
+                    className={cn(
+                      "absolute bottom-0.5 left-1 p-0.5 rounded-full transition-all duration-200 z-10",
+                      hoveredEmailId === mainEmail.id || mainEmail.isStarred
+                        ? "opacity-100 scale-100"
+                        : "opacity-0 scale-75 pointer-events-none",
+                      mainEmail.isStarred
+                        ? "text-yellow-500"
+                        : "text-muted-foreground hover:text-yellow-500"
+                    )}
+                    title={mainEmail.isStarred ? "Unstar" : "Star"}
+                  >
+                    <Star className={cn("w-3 h-3", mainEmail.isStarred && "fill-current")} />
+                  </button>
 
                   {/* Selection checkbox */}
                   <button
@@ -465,13 +1048,13 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
                     {selectedIds.has(mainEmail.id) ? <CheckSquare className="w-4 h-4 text-primary" /> : <Square className="w-4 h-4" />}
                   </button>
 
-                  {/* Sender - Fixed width, show company name if available, otherwise sender */}
-                  <div className="flex-shrink-0 w-28 min-w-0">
+                  {/* Sender - Fixed width, always show actual sender name */}
+                  <div className="flex-shrink-0 w-32 min-w-0">
                     <div
-                      className={cn("text-sm font-medium truncate", mainEmail.isRead ? "text-muted-foreground" : "text-foreground")}
-                      title={mainEmail.companyName || fromText}
+                      className={cn("text-sm truncate", mainEmail.isRead ? "text-muted-foreground font-normal" : "text-foreground font-semibold")}
+                      title={fromText}
                     >
-                      {mainEmail.companyName || fromText}
+                      {fromText}
                     </div>
                     {/* @YOU badge right under sender */}
                     {mainEmail.isAboutMe && (
@@ -487,25 +1070,50 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
                     )}
                   </div>
 
-                  {/* Content Preview - Flexible width */}
+                  {/* Content Preview - Gmail-style: Subject - Body preview */}
                   <div className="flex-1 min-w-0 overflow-hidden">
                     {/* In compact mode: always show text summary, never HTML card */}
                     {isCompactWidth ? (
-                      <div className="text-sm text-muted-foreground truncate">
-                        {mainEmail.summary || (mainEmail.body && typeof mainEmail.body === "string" ? mainEmail.body.substring(0, 80) : mainEmail.subject)}
+                      <div className="text-sm truncate flex items-center">
+                        <span className={cn(
+                          "flex-shrink-0",
+                          mainEmail.isRead ? "text-muted-foreground/80 font-normal" : "text-foreground font-semibold"
+                        )}>
+                          {mainEmail.subject || "No subject"}
+                        </span>
+                        {(mainEmail.summary || mainEmail.body) && (
+                          <>
+                            <span className="text-muted-foreground/40 mx-1.5 flex-shrink-0">–</span>
+                            <span className="text-muted-foreground/60 truncate">
+                              {mainEmail.summary || (typeof mainEmail.body === "string" ? mainEmail.body.replace(/\s+/g, ' ').substring(0, 100) : "")}
+                            </span>
+                          </>
+                        )}
                       </div>
                     ) : (
                       /* Full width mode: show HTML card if available */
                       mainEmail.renderAsHtml && mainEmail.htmlSnippet ? (
                         <div className="overflow-hidden">
-                          <EmailHtmlCard htmlContent={mainEmail.htmlSnippet} />
+                          <EmailHtmlCard htmlContent={mainEmail.htmlSnippet} onCardClick={() => onSelectEmail(mainEmail)} onLinkClick={(url) => onHtmlCardLinkClick?.(mainEmail.id, url)} />
                         </div>
                       ) : (
-                        /* Email Body Preview - Only show if NO HTML card */
-                        mainEmail.body &&
-                        typeof mainEmail.body === "string" && (
-                          <div className="text-sm text-muted-foreground truncate">{mainEmail.body.substring(0, 150)}...</div>
-                        )
+                        /* Gmail-style: Subject - Body preview */
+                        <div className="text-sm truncate flex items-center">
+                          <span className={cn(
+                            "flex-shrink-0",
+                            mainEmail.isRead ? "text-muted-foreground/80 font-normal" : "text-foreground font-semibold"
+                          )}>
+                            {mainEmail.subject || "No subject"}
+                          </span>
+                          {(mainEmail.summary || mainEmail.body) && (
+                            <>
+                              <span className="text-muted-foreground/40 mx-1.5 flex-shrink-0">–</span>
+                              <span className="text-muted-foreground/60 truncate">
+                                {mainEmail.summary || (typeof mainEmail.body === "string" ? mainEmail.body.replace(/\s+/g, ' ').substring(0, 150) : "")}
+                              </span>
+                            </>
+                          )}
+                        </div>
                       )
                     )}
                   </div>
@@ -513,17 +1121,17 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
                   {/* Badges - Hidden when width is compact */}
                   {!isCompactWidth && (
                     <div className="flex flex-wrap items-center gap-1 w-40 flex-shrink-0 overflow-hidden justify-end">
-                      {/* Company badge FIRST with logo */}
-                      {mainEmail.companyName && (
+                      {/* Company badge FIRST with logo - only if company matches sender */}
+                      {validCompanyName && (
                         <Badge
                           variant="outline"
                           className="px-1.5 py-0 text-[10px] font-medium border flex items-center gap-1 max-w-[80px] h-auto"
                           style={getBadgeStyle("#6366F1")}
                         >
-                          {mainEmail.companyLogoUrl && (
+                          {validCompanyLogo && (
                             <Image
-                              src={mainEmail.companyLogoUrl}
-                              alt={mainEmail.companyName}
+                              src={validCompanyLogo}
+                              alt={validCompanyName}
                               width={10}
                               height={10}
                               className="rounded-sm object-contain flex-shrink-0"
@@ -533,12 +1141,11 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
                               }}
                             />
                           )}
-                          <span className="truncate">{mainEmail.companyName}</span>
+                          <span className="truncate">{validCompanyName}</span>
                         </Badge>
                       )}
                       {/* Show other badges, but skip if it's the same as company name */}
-                      {mainEmail.badges
-                        ?.filter((b: any) => b.name !== mainEmail.companyName)
+                      {filterMeaningfulBadges(mainEmail.badges, validCompanyName)
                         .slice(0, 2)
                         .map((badge: any, index: number) => (
                           <Badge
@@ -554,12 +1161,22 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
                     </div>
                   )}
 
-                  {/* Date - Compact when width is small */}
+                  {/* Date / Snooze indicator - Compact when width is small */}
                   <div className={cn(
-                    "flex-shrink-0 text-muted-foreground text-right",
-                    isCompactWidth ? "text-[10px] w-14" : "text-xs w-20"
+                    "flex-shrink-0 text-right flex items-center gap-1 justify-end",
+                    isCompactWidth ? "text-[10px] w-20" : "text-xs w-28",
+                    mainEmail.snoozedUntil ? "text-orange-500 dark:text-orange-400" : "text-muted-foreground"
                   )}>
-                    {formatEmailDate(mainEmail.date || mainEmail.createdAt)}
+                    {mainEmail.snoozedUntil ? (
+                      <>
+                        <Clock className="w-3 h-3 flex-shrink-0" />
+                        <span title={`Snoozed until ${format(new Date(mainEmail.snoozedUntil), 'PPp')}`}>
+                          {format(new Date(mainEmail.snoozedUntil), isCompactWidth ? 'MMM d' : 'MMM d, h:mm a')}
+                        </span>
+                      </>
+                    ) : (
+                      formatEmailDate(mainEmail.date || mainEmail.createdAt)
+                    )}
                   </div>
 
                   {/* Show attachment icon inline with date in compact mode */}
@@ -567,13 +1184,24 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
                     <Paperclip className="size-3 text-muted-foreground flex-shrink-0" />
                   )}
                 </button>
+                {/* Hover Actions */}
+                <HoverActions emailId={mainEmail.id} hasUnsubscribe={mainEmail.badges?.some((b: any) => b.name === "Newsletter" || b.name === "Promotional")} isRead={mainEmail.isRead} isSnoozed={!!mainEmail.snoozedUntil} />
+                </div>
               ) : (
                 /* DETAILED VIEW - VERTICAL LAYOUT */
+                <div
+                  className="relative"
+                  onMouseEnter={() => setHoveredEmailId(mainEmail.id)}
+                  onMouseLeave={() => {
+                    setHoveredEmailId(null);
+                    setShowSnoozeMenu(null);
+                  }}
+                >
                 <button
                   onClick={() => onSelectEmail(mainEmail)}
                   className={cn(
-                    "flex flex-col w-full gap-2 px-4 py-3 text-left transition-all duration-200 relative",
-                    mainEmail.isRead ? "bg-white dark:bg-gray-900" : "bg-blue-50 dark:bg-blue-950/30",
+                    "flex flex-col w-full gap-1.5 px-4 py-2.5 text-left transition-all duration-200 relative",
+                    mainEmail.isRead ? "bg-white dark:bg-gray-900" : "bg-blue-50 dark:bg-blue-950/40",
                     selectedIds.has(mainEmail.id) && "bg-primary/10",
                     "hover:shadow-[inset_4px_0_0_0_hsl(var(--primary)),0_4px_6px_-1px_rgb(0_0_0_/0.1),0_2px_4px_-2px_rgb(0_0_0_/0.1)]"
                   )}
@@ -584,16 +1212,37 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
                     title={mainEmail.isRead ? "Read" : "Unread"}
                   />
 
+                  {/* Star icon - bottom left corner of the row */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onToggleStar(mainEmail.id, !mainEmail.isStarred);
+                    }}
+                    className={cn(
+                      "absolute bottom-2 left-2 p-0.5 rounded-full transition-all duration-200 z-10",
+                      hoveredEmailId === mainEmail.id || mainEmail.isStarred
+                        ? "opacity-100 scale-100"
+                        : "opacity-0 scale-75 pointer-events-none",
+                      mainEmail.isStarred
+                        ? "text-yellow-500"
+                        : "text-muted-foreground hover:text-yellow-500"
+                    )}
+                    title={mainEmail.isStarred ? "Unstar" : "Star"}
+                  >
+                    <Star className={cn("w-3.5 h-3.5", mainEmail.isStarred && "fill-current")} />
+                  </button>
+
                   {/* Row 1: Sender with controls */}
                   <div className="flex items-center gap-3 w-full">
-                    {/* Sender Avatar (Profile Photo -> Gravatar -> Company Logo -> Initials) */}
+                    {/* Sender Avatar (Profile Photo -> Company Logo -> Initials) */}
                     <div className="flex-shrink-0 ml-2">
                       <SenderAvatar
+                        key={`avatar-detail-${mainEmail.id}-${emailAddress}`}
                         email={emailAddress}
                         name={fromText}
                         size={32}
-                        companyLogoUrl={mainEmail.companyLogoUrl}
-                        companyName={mainEmail.companyName}
+                        companyLogoUrl={validCompanyLogo}
+                        companyName={validCompanyName}
                         senderProfilePhotoUrl={mainEmail.senderProfilePhotoUrl}
                       />
                     </div>
@@ -608,7 +1257,7 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
 
                     {/* Sender */}
                     <div className="flex-1 min-w-0">
-                      <div className={cn("text-sm font-semibold", mainEmail.isRead ? "text-muted-foreground" : "text-foreground")}>{fromText}</div>
+                      <div className={cn("text-sm", mainEmail.isRead ? "text-muted-foreground font-normal" : "text-foreground font-semibold")}>{fromText}</div>
                     </div>
 
                     {/* @YOU badge */}
@@ -619,8 +1268,17 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
                       </div>
                     )}
 
-                    {/* Date */}
-                    <div className="flex-shrink-0 text-xs text-muted-foreground">{formatEmailDate(mainEmail.date || mainEmail.createdAt)}</div>
+                    {/* Date / Snooze indicator */}
+                    <div className="flex-shrink-0 text-xs text-muted-foreground flex items-center gap-1">
+                      {mainEmail.snoozedUntil ? (
+                        <span className="flex items-center gap-1 text-orange-500 dark:text-orange-400" title={`Snoozed until ${format(new Date(mainEmail.snoozedUntil), 'PPp')}`}>
+                          <Clock className="w-3 h-3" />
+                          {format(new Date(mainEmail.snoozedUntil), 'MMM d, h:mm a')}
+                        </span>
+                      ) : (
+                        formatEmailDate(mainEmail.date || mainEmail.createdAt)
+                      )}
+                    </div>
                   </div>
 
                   {/* Row 2: Subject */}
@@ -640,7 +1298,7 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
                   {/* Row 4: HTML Summary */}
                   {mainEmail.renderAsHtml && mainEmail.htmlSnippet ? (
                     <div className="pl-11 overflow-hidden">
-                      <EmailHtmlCard htmlContent={mainEmail.htmlSnippet} />
+                      <EmailHtmlCard htmlContent={mainEmail.htmlSnippet} onCardClick={() => onSelectEmail(mainEmail)} onLinkClick={(url) => onHtmlCardLinkClick?.(mainEmail.id, url)} />
                     </div>
                   ) : (
                     /* Email Body Preview - Only show if NO HTML card */
@@ -654,17 +1312,17 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
 
                   {/* Row 5: Badges and Attachment */}
                   <div className="pl-11 flex items-center gap-1 flex-wrap">
-                    {/* Company badge ALWAYS comes first */}
-                    {mainEmail.companyName && (
+                    {/* Company badge - only if company matches sender */}
+                    {validCompanyName && (
                       <Badge
                         variant="outline"
                         className="px-1.5 py-0 text-[10px] font-medium border flex items-center gap-1 max-w-[100px] h-auto"
                         style={getBadgeStyle("#6366F1")}
                       >
-                        {mainEmail.companyLogoUrl && (
+                        {validCompanyLogo && (
                           <Image
-                            src={mainEmail.companyLogoUrl}
-                            alt={mainEmail.companyName}
+                            src={validCompanyLogo}
+                            alt={validCompanyName}
                             width={10}
                             height={10}
                             className="rounded-sm object-contain flex-shrink-0"
@@ -674,13 +1332,12 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
                             }}
                           />
                         )}
-                        <span className="truncate">{mainEmail.companyName}</span>
+                        <span className="truncate">{validCompanyName}</span>
                       </Badge>
                     )}
 
                     {/* Show other badges, but skip if it's the same as company name */}
-                    {mainEmail.badges
-                      ?.filter((b: any) => b.name !== mainEmail.companyName)
+                    {filterMeaningfulBadges(mainEmail.badges, validCompanyName)
                       .slice(0, 5)
                       .map((badge: any, index: number) => (
                         <Badge
@@ -695,6 +1352,9 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
                     {mainEmail.hasAttachment && <Paperclip className="size-4 text-muted-foreground" />}
                   </div>
                 </button>
+                {/* Hover Actions */}
+                <HoverActions emailId={mainEmail.id} hasUnsubscribe={mainEmail.badges?.some((b: any) => b.name === "Newsletter" || b.name === "Promotional")} isRead={mainEmail.isRead} isSnoozed={!!mainEmail.snoozedUntil} />
+                </div>
               )}
 
               {/* Previous Emails in Thread (Replies) */}
@@ -706,14 +1366,10 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
                     </div>
                   </div>
                   {previousEmails.map((prevEmail) => {
-                    const prevFromText =
-                      typeof prevEmail.from === "string"
-                        ? prevEmail.from
-                        : (prevEmail.from as any)?.name || (prevEmail.from as any)?.email || "Unknown";
-                    const prevEmailAddress =
-                      typeof prevEmail.from === "string"
-                        ? prevEmail.from
-                        : (prevEmail.from as any)?.email || "";
+                    // Parse sender info properly (handles "Name <email>" format)
+                    const prevSender = parseSender(prevEmail.from);
+                    const prevFromText = prevSender.name;
+                    const prevEmailAddress = prevSender.email;
                     return (
                       <button
                         key={prevEmail.id}
@@ -725,7 +1381,7 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
                         )}
                       >
                         {/* Sender Avatar for reply */}
-                        <SenderAvatar email={prevEmailAddress} name={prevFromText} size={20} />
+                        <SenderAvatar key={`avatar-reply-${prevEmail.id}-${prevEmailAddress}`} email={prevEmailAddress} name={prevFromText} size={20} />
 
                         {/* From / Sender Name */}
                         <div className="flex-shrink-0 w-28 min-w-0">
@@ -759,7 +1415,7 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
 
                         {/* Badges */}
                         <div className="flex items-center gap-1 flex-shrink-0">
-                          {prevEmail.badges?.slice(0, 2).map((badge: any, index: number) => (
+                          {filterMeaningfulBadges(prevEmail.badges, prevEmail.companyName).slice(0, 2).map((badge: any, index: number) => (
                             <Badge
                               key={index}
                               variant="outline"

@@ -18,7 +18,8 @@ import {
   Legend,
   ResponsiveContainer,
 } from 'recharts'
-import { format, subDays, startOfDay, endOfDay } from 'date-fns'
+import { format } from 'date-fns'
+import { Info } from 'lucide-react'
 
 interface BadgeAnalytics {
   badgeName: string
@@ -55,6 +56,7 @@ export default function BadgeAnalyticsPage() {
   const [timeline, setTimeline] = useState<TimelineData[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [dateRange, setDateRange] = useState<DateRange>('30d')
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     checkAuth()
@@ -70,16 +72,25 @@ export default function BadgeAnalyticsPage() {
 
   const loadAnalytics = async () => {
     setIsLoading(true)
+    setError(null)
     try {
       // Fetch badge engagement metrics
-      const response = await fetch(`http://localhost:3000/api/badges/${encodeURIComponent(badgeName)}/analytics?range=${dateRange}`, {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000'
+      const token = localStorage.getItem('accessToken')
+
+      if (!token) {
+        throw new Error('Not authenticated')
+      }
+
+      const response = await fetch(`${apiUrl}/api/badges/${encodeURIComponent(badgeName)}/analytics?range=${dateRange}`, {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('accessToken')}`
+          'Authorization': `Bearer ${token}`
         }
       })
 
       if (!response.ok) {
-        throw new Error('Failed to fetch analytics')
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || `HTTP ${response.status}: Failed to fetch analytics`)
       }
 
       const data = await response.json()
@@ -103,48 +114,26 @@ export default function BadgeAnalyticsPage() {
 
       setAnalytics(analyticsData)
 
-      // Generate mock timeline data (replace with actual API data later)
-      const mockTimeline = generateMockTimeline(dateRange)
-      setTimeline(mockTimeline)
-    } catch (error) {
-      console.error('Failed to load analytics:', error)
-      // Set mock data for development
-      setAnalytics({
-        badgeName,
-        badgeColor: '#6366f1',
-        category: 'Company',
-        totalEmails: 45,
-        emailsOpened: 38,
-        emailsWithClicks: 25,
-        totalTimeSpentSeconds: 2700, // 45 minutes
-        avgTimeSpentSeconds: 71, // ~1 minute per email
-        totalLinkClicks: 42,
-        openRate: 0.84,
-        clickRate: 0.66,
-        engagementScore: 0.75,
-        lastInteractionAt: new Date().toISOString(),
-      })
-      setTimeline(generateMockTimeline(dateRange))
+      // Use real timeline data from API
+      if (data.timeline && Array.isArray(data.timeline)) {
+        // Format dates for display
+        setTimeline(data.timeline.map((item: any) => ({
+          date: format(new Date(item.date), 'MMM dd'),
+          emails: item.emails || 0,
+          opened: item.opened || 0,
+          timeSpent: item.timeSpent || 0,
+        })))
+      } else {
+        setTimeline([])
+      }
+    } catch (err) {
+      console.error('Failed to load analytics:', err)
+      setError(err instanceof Error ? err.message : 'Failed to load analytics')
+      setAnalytics(null)
+      setTimeline([])
     } finally {
       setIsLoading(false)
     }
-  }
-
-  const generateMockTimeline = (range: DateRange): TimelineData[] => {
-    const days = range === '7d' ? 7 : range === '30d' ? 30 : range === '90d' ? 90 : 365
-    const data: TimelineData[] = []
-
-    for (let i = days - 1; i >= 0; i--) {
-      const date = subDays(new Date(), i)
-      data.push({
-        date: format(date, 'MMM dd'),
-        emails: Math.floor(Math.random() * 10) + 1,
-        opened: Math.floor(Math.random() * 8) + 1,
-        timeSpent: Math.floor(Math.random() * 600) + 60, // seconds
-      })
-    }
-
-    return data
   }
 
   const formatTime = (seconds: number): string => {
@@ -165,13 +154,23 @@ export default function BadgeAnalyticsPage() {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center">
-          <p className="text-muted-foreground">Badge not found</p>
-          <button
-            onClick={() => router.push('/settings?tab=badges')}
-            className="mt-4 px-4 py-2 bg-primary text-primary-foreground rounded-lg"
-          >
-            Back to Badges
-          </button>
+          <p className="text-muted-foreground">
+            {error ? `Error: ${error}` : `Badge "${badgeName}" not found`}
+          </p>
+          <div className="mt-4 flex gap-2 justify-center">
+            <button
+              onClick={() => loadAnalytics()}
+              className="px-4 py-2 bg-secondary text-secondary-foreground rounded-lg hover:bg-secondary/80"
+            >
+              Retry
+            </button>
+            <button
+              onClick={() => router.push('/analytics')}
+              className="px-4 py-2 bg-primary text-primary-foreground rounded-lg"
+            >
+              Back to Analytics
+            </button>
+          </div>
         </div>
       </div>
     )
@@ -184,7 +183,7 @@ export default function BadgeAnalyticsPage() {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
             <button
-              onClick={() => router.push('/settings?tab=badges')}
+              onClick={() => router.push('/analytics')}
               className="text-foreground hover:text-foreground/80"
             >
               <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -231,6 +230,7 @@ export default function BadgeAnalyticsPage() {
             value={analytics.totalEmails}
             icon="📧"
             color={analytics.badgeColor}
+            tooltip="Total number of emails that have this badge in the selected time period."
           />
           <MetricCard
             title="Open Rate"
@@ -238,6 +238,7 @@ export default function BadgeAnalyticsPage() {
             subtitle={`${analytics.emailsOpened} opened`}
             icon="👁️"
             color="#10b981"
+            tooltip="Percentage of emails you've opened and read for at least 3 seconds."
           />
           <MetricCard
             title="Total Time Spent"
@@ -245,6 +246,7 @@ export default function BadgeAnalyticsPage() {
             subtitle={`Avg: ${formatTime(Math.round(analytics.avgTimeSpentSeconds))}`}
             icon="⏱️"
             color="#f59e0b"
+            tooltip="Total time you've spent reading emails with this badge. Max 2 minutes per email to avoid inflated stats."
           />
           <MetricCard
             title="Engagement Score"
@@ -252,6 +254,7 @@ export default function BadgeAnalyticsPage() {
             subtitle={`${analytics.totalLinkClicks} clicks`}
             icon="🎯"
             color="#8b5cf6"
+            tooltip="Combined score based on open rate (40%), click rate (30%), and reading time (30%). Higher = more engaged."
           />
         </div>
 
@@ -326,7 +329,17 @@ export default function BadgeAnalyticsPage() {
         {/* Engagement Breakdown */}
         <div className="grid grid-cols-2 gap-4">
           <div className="bg-card border border-border rounded-lg p-6">
-            <h2 className="text-lg font-semibold text-foreground mb-4">Email Status</h2>
+            <div className="flex items-center gap-2 mb-4">
+              <h2 className="text-lg font-semibold text-foreground">Email Status</h2>
+              <div className="relative group">
+                <Info className="w-4 h-4 text-muted-foreground cursor-help" />
+                <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-3 py-2 bg-popover border border-border rounded-lg shadow-lg text-xs text-popover-foreground w-64 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50">
+                  <p className="font-medium mb-1">What this shows:</p>
+                  <p className="text-muted-foreground">How many emails with this badge you&apos;ve opened vs left unopened. An email counts as &quot;opened&quot; when you click on it to read it for at least 3 seconds.</p>
+                  <div className="absolute left-1/2 -translate-x-1/2 top-full w-2 h-2 bg-popover border-r border-b border-border rotate-45 -mt-1"></div>
+                </div>
+              </div>
+            </div>
             <ResponsiveContainer width="100%" height={250}>
               <PieChart>
                 <Pie
@@ -341,17 +354,38 @@ export default function BadgeAnalyticsPage() {
                   outerRadius={80}
                   fill="#8884d8"
                   dataKey="value"
+                  stroke="none"
                 >
                   <Cell fill="#10b981" />
                   <Cell fill="hsl(var(--muted))" />
                 </Pie>
-                <Tooltip />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: 'hsl(var(--card))',
+                    border: '1px solid hsl(var(--border))',
+                    borderRadius: '6px',
+                    padding: '6px 10px',
+                    fontSize: '12px',
+                  }}
+                  labelStyle={{ color: 'hsl(var(--foreground))' }}
+                  itemStyle={{ color: 'hsl(var(--foreground))' }}
+                />
               </PieChart>
             </ResponsiveContainer>
           </div>
 
           <div className="bg-card border border-border rounded-lg p-6">
-            <h2 className="text-lg font-semibold text-foreground mb-4">Click Activity</h2>
+            <div className="flex items-center gap-2 mb-4">
+              <h2 className="text-lg font-semibold text-foreground">Click Activity</h2>
+              <div className="relative group">
+                <Info className="w-4 h-4 text-muted-foreground cursor-help" />
+                <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-3 py-2 bg-popover border border-border rounded-lg shadow-lg text-xs text-popover-foreground w-64 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50">
+                  <p className="font-medium mb-1">What this shows:</p>
+                  <p className="text-muted-foreground">Of the emails you opened, how many had links you clicked on. This helps measure how engaging or actionable these emails are for you.</p>
+                  <div className="absolute left-1/2 -translate-x-1/2 top-full w-2 h-2 bg-popover border-r border-b border-border rotate-45 -mt-1"></div>
+                </div>
+              </div>
+            </div>
             <ResponsiveContainer width="100%" height={250}>
               <PieChart>
                 <Pie
@@ -366,11 +400,22 @@ export default function BadgeAnalyticsPage() {
                   outerRadius={80}
                   fill="#8884d8"
                   dataKey="value"
+                  stroke="none"
                 >
                   <Cell fill="#8b5cf6" />
                   <Cell fill="hsl(var(--muted))" />
                 </Pie>
-                <Tooltip />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: 'hsl(var(--card))',
+                    border: '1px solid hsl(var(--border))',
+                    borderRadius: '6px',
+                    padding: '6px 10px',
+                    fontSize: '12px',
+                  }}
+                  labelStyle={{ color: 'hsl(var(--foreground))' }}
+                  itemStyle={{ color: 'hsl(var(--foreground))' }}
+                />
               </PieChart>
             </ResponsiveContainer>
           </div>
@@ -378,7 +423,17 @@ export default function BadgeAnalyticsPage() {
 
         {/* Insights */}
         <div className="bg-card border border-border rounded-lg p-6">
-          <h2 className="text-lg font-semibold text-foreground mb-4">💡 Insights</h2>
+          <div className="flex items-center gap-2 mb-4">
+            <h2 className="text-lg font-semibold text-foreground">Insights</h2>
+            <div className="relative group">
+              <Info className="w-4 h-4 text-muted-foreground cursor-help" />
+              <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-3 py-2 bg-popover border border-border rounded-lg shadow-lg text-xs text-popover-foreground w-72 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50">
+                <p className="font-medium mb-1">How insights work:</p>
+                <p className="text-muted-foreground">These are automatically generated based on your reading patterns. They help you understand which email sources you engage with most and which you might want to unsubscribe from.</p>
+                <div className="absolute left-1/2 -translate-x-1/2 top-full w-2 h-2 bg-popover border-r border-b border-border rotate-45 -mt-1"></div>
+              </div>
+            </div>
+          </div>
           <div className="space-y-3">
             {analytics.openRate > 0.8 && (
               <InsightItem
@@ -421,17 +476,30 @@ function MetricCard({
   subtitle,
   icon,
   color,
+  tooltip,
 }: {
   title: string
   value: string | number
   subtitle?: string
   icon: string
   color: string
+  tooltip?: string
 }) {
   return (
     <div className="bg-card border border-border rounded-lg p-6">
       <div className="flex items-start justify-between mb-2">
-        <p className="text-sm text-muted-foreground">{title}</p>
+        <div className="flex items-center gap-1.5">
+          <p className="text-sm text-muted-foreground">{title}</p>
+          {tooltip && (
+            <div className="relative group">
+              <Info className="w-3.5 h-3.5 text-muted-foreground/60 cursor-help" />
+              <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-3 py-2 bg-popover border border-border rounded-lg shadow-lg text-xs text-popover-foreground w-56 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50">
+                <p className="text-muted-foreground">{tooltip}</p>
+                <div className="absolute left-1/2 -translate-x-1/2 top-full w-2 h-2 bg-popover border-r border-b border-border rotate-45 -mt-1"></div>
+              </div>
+            </div>
+          )}
+        </div>
         <span className="text-2xl">{icon}</span>
       </div>
       <p className="text-3xl font-bold text-foreground" style={{ color }}>

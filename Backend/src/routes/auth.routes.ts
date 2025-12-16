@@ -80,6 +80,26 @@ router.get('/outlook/authorize', authController.initiateOutlookOAuth);
  */
 router.get('/outlook/callback', authController.handleOutlookCallback);
 
+// ============== Email Verification Routes ==============
+
+/**
+ * GET /api/auth/verify-email
+ * Verify email with token (from email link)
+ */
+router.get('/verify-email', authController.verifyEmail);
+
+/**
+ * POST /api/auth/resend-verification
+ * Resend verification email (authenticated)
+ */
+router.post('/resend-verification', authMiddleware, authController.resendVerification);
+
+/**
+ * GET /api/auth/verification-status
+ * Check if user's email is verified (authenticated)
+ */
+router.get('/verification-status', authMiddleware, authController.getVerificationStatus);
+
 // ============== Session Management Routes (Authenticated) ==============
 
 /**

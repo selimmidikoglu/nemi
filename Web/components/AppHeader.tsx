@@ -31,7 +31,7 @@ export default function AppHeader({ showBackButton, onBackClick, title, rightCon
 
           <Link href="/feed" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
             <Image
-              src="/main-logo.png"
+              src="/Nemi-logo.png"
               alt="NEMI Logo"
               width={32}
               height={32}

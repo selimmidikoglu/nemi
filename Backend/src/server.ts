@@ -15,7 +15,9 @@ import { connectDatabase } from './config/database';
 import { EmailSyncJob } from './jobs/email-sync.job';
 import { AIAnalysisJob } from './jobs/ai-analysis.job';
 import { EngagementCalculationJob } from './jobs/engagement-calculation.job';
+import { UnsubscribeRecommendationsJob } from './jobs/unsubscribe-recommendations.job';
 import { GmailPushService } from './services/gmail-push.service';
+import { OutlookPushService } from './services/outlook-push.service';
 
 // Store the ngrok URL globally so it can be accessed by other services
 export let ngrokUrl: string | null = null;
@@ -91,6 +93,10 @@ const startServer = async () => {
     engagementCalcJob.start();
     engagementCalcJob.startDailyMaintenance();
 
+    // Start unsubscribe recommendations job
+    const unsubscribeJob = new UnsubscribeRecommendationsJob();
+    unsubscribeJob.start();
+
     // Create HTTP server
     const server = http.createServer(app);
 
@@ -106,6 +112,16 @@ const startServer = async () => {
         logger.error('Error renewing Gmail watches:', error);
       }
     }, 6 * 60 * 60 * 1000); // 6 hours
+
+    // Start Outlook subscription renewal job (every 2 hours)
+    // Outlook subscriptions expire after 3 days max, so renew more frequently
+    setInterval(async () => {
+      try {
+        await OutlookPushService.renewExpiringSubscriptions();
+      } catch (error) {
+        logger.error('Error renewing Outlook subscriptions:', error);
+      }
+    }, 2 * 60 * 60 * 1000); // 2 hours
 
     // Start listening
     server.listen(PORT, async () => {
@@ -129,7 +145,8 @@ const startServer = async () => {
           ngrokUrl = listener.url() || null;
           logger.info(`🚀 Ngrok tunnel established: ${ngrokUrl}`);
           logger.info(`📧 Gmail webhook URL: ${ngrokUrl}/api/gmail/webhook`);
-          logger.info(`💡 Use this URL in Google Cloud Pub/Sub push subscription`);
+          logger.info(`📧 Outlook webhook URL: ${ngrokUrl}/api/outlook/webhook`);
+          logger.info(`💡 Use these URLs for push notification subscriptions`);
         } catch (error: any) {
           logger.error('Failed to start ngrok tunnel:', error?.message || error);
           logger.warn('Gmail push notifications will not work without ngrok in development');

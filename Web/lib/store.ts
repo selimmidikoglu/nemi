@@ -51,7 +51,15 @@ interface AuthState {
   revokeAllSessions: () => Promise<void>
 }
 
-type ViewMode = 'compact' | 'detailed'
+type ViewMode = 'compact' | 'detailed' | 'minimal'
+
+interface BadgeStat {
+  name: string
+  color: string
+  icon: string
+  category: string
+  count: number
+}
 
 interface EmailState {
   emails: Email[]
@@ -64,6 +72,8 @@ interface EmailState {
   allEmailsCount: number // Total count of ALL emails (ignores filters) - for "All" badge
   viewMode: ViewMode
   searchQuery: string
+  refreshKey: number // Incremented when emails are fetched to trigger filter refresh
+  searchBadgeStats: BadgeStat[] | null // Badge stats for search results (null when not searching)
   filters: {
     isRead?: boolean
     isStarred?: boolean
@@ -71,13 +81,29 @@ interface EmailState {
     importance?: string
     isMeRelated?: boolean
     badgeName?: string
+    specialFolder?: 'starred' | 'snoozed' | 'archived' | 'deleted' | 'sent' | 'spam'
+    emailAccountId?: number
+    // Advanced search filters
+    advancedSearch?: {
+      from?: string
+      to?: string
+      subject?: string
+      hasWords?: string
+      doesntHave?: string
+      hasAttachment?: boolean
+      dateWithin?: number
+      dateFrom?: string
+      dateTo?: string
+    }
   }
   fetchEmails: () => Promise<void>
   selectEmail: (email: Email | null) => void
-  markAsRead: (id: number, isRead: boolean) => Promise<void>
-  toggleStar: (id: number, isStarred: boolean) => Promise<void>
-  deleteEmail: (id: number) => Promise<void>
-  deleteEmails: (ids: number[]) => Promise<void>
+  markAsRead: (id: string, isRead: boolean) => Promise<void>
+  toggleStar: (id: string, isStarred: boolean) => Promise<void>
+  deleteEmail: (id: string) => Promise<void>
+  deleteEmails: (ids: string[]) => Promise<void>
+  archiveEmail: (id: string) => void  // Optimistically remove from local state
+  snoozeEmail: (id: string) => void   // Optimistically remove from local state
   setFilters: (filters: EmailState['filters']) => void
   setPage: (page: number) => void
   setViewMode: (mode: ViewMode) => void
@@ -91,8 +117,8 @@ interface EmailAccountState {
   isLoading: boolean
   fetchAccounts: () => Promise<void>
   addAccount: (data: any) => Promise<void>
-  removeAccount: (id: number) => Promise<void>
-  syncAccount: (id: number) => Promise<void>
+  removeAccount: (id: string) => Promise<void>
+  syncAccount: (id: string) => Promise<void>
 }
 
 export const useAuthStore = create<AuthState>((set, get) => ({
@@ -279,6 +305,8 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   allEmailsCount: 0,
   viewMode: (typeof window !== 'undefined' && localStorage.getItem('emailViewMode') as ViewMode) || 'compact',
   searchQuery: '',
+  refreshKey: 0,
+  searchBadgeStats: null,
   filters: {},
 
   fetchEmails: async () => {
@@ -287,24 +315,124 @@ export const useEmailStore = create<EmailState>((set, get) => ({
       const { page, filters, searchQuery, allEmailsCount } = get()
       const limit = 20
       const offset = (page - 1) * limit
+
+      // Handle special folders with separate endpoints or filters
+      if (filters.specialFolder === 'starred') {
+        // Starred emails use the regular endpoint with isStarred filter
+        const response = await apiService.getEmails({
+          limit,
+          offset,
+          isStarred: true,
+          ...(filters.emailAccountId && { emailAccountId: filters.emailAccountId }),
+          ...(searchQuery && { search: searchQuery })
+        })
+        set({
+          emails: response.data,
+          totalPages: response.pagination.totalPages,
+          totalEmails: response.pagination.total,
+          isLoading: false,
+        })
+        return
+      }
+
+      if (filters.specialFolder === 'sent') {
+        // TODO: Implement sent emails endpoint when available
+        // For now, return empty with a message flag
+        set({
+          emails: [],
+          totalPages: 1,
+          totalEmails: 0,
+          isLoading: false,
+        })
+        return
+      }
+
+      if (filters.specialFolder === 'spam') {
+        // TODO: Implement spam emails endpoint when available
+        // For now, return empty
+        set({
+          emails: [],
+          totalPages: 1,
+          totalEmails: 0,
+          isLoading: false,
+        })
+        return
+      }
+
+      if (filters.specialFolder === 'snoozed') {
+        const emails = await apiService.getSnoozedEmails()
+        set({
+          emails,
+          totalPages: 1,
+          totalEmails: emails.length,
+          isLoading: false,
+        })
+        return
+      }
+
+      if (filters.specialFolder === 'archived') {
+        const emails = await apiService.getArchivedEmails(limit, offset)
+        set({
+          emails,
+          totalPages: 1,
+          totalEmails: emails.length,
+          isLoading: false,
+        })
+        return
+      }
+
+      if (filters.specialFolder === 'deleted') {
+        const emails = await apiService.getDeletedEmails(limit, offset)
+        set({
+          emails,
+          totalPages: 1,
+          totalEmails: emails.length,
+          isLoading: false,
+        })
+        return
+      }
+
+      // Regular email fetch - exclude specialFolder and advancedSearch from params
+      const { specialFolder, advancedSearch, ...regularFilters } = filters
+
+      // If we have advanced search filters, use the search endpoint
+      if (advancedSearch && Object.keys(advancedSearch).length > 0) {
+        const response = await apiService.advancedSearch({
+          ...advancedSearch,
+          page,
+          limit
+        })
+        set((state) => ({
+          emails: response.emails,
+          totalPages: response.totalPages,
+          totalEmails: response.total,
+          searchBadgeStats: response.badgeStats || null,
+          isLoading: false,
+          refreshKey: state.refreshKey + 1,
+        }))
+        return
+      }
+
       const response = await apiService.getEmails({
         limit,
         offset,
-        ...filters,
+        ...regularFilters,
         ...(searchQuery && { search: searchQuery })
       })
 
       // Check if we're fetching without filters (for "All" count)
-      const hasFilters = Object.keys(filters).length > 0 || searchQuery
+      const hasFilters = Object.keys(regularFilters).length > 0 || searchQuery
 
-      set({
+      set((state) => ({
         emails: response.data,
         totalPages: response.pagination.totalPages,
         totalEmails: response.pagination.total,
         // Only update allEmailsCount when there are no filters, or if it's never been set
         allEmailsCount: !hasFilters ? response.pagination.total : (allEmailsCount || response.pagination.total),
         isLoading: false,
-      })
+        refreshKey: state.refreshKey + 1, // Increment to trigger filter refresh
+        searchBadgeStats: null, // Clear search badge stats when not doing advanced search
+      }))
     } catch (error) {
       console.error('Failed to fetch emails:', error)
       set({ error: 'Failed to load emails', isLoading: false })
@@ -318,7 +446,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     }
   },
 
-  markAsRead: async (id: number, isRead: boolean) => {
+  markAsRead: async (id: string, isRead: boolean) => {
     try {
       await apiService.markEmailAsRead(id, isRead)
       set((state) => ({
@@ -335,7 +463,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     }
   },
 
-  toggleStar: async (id: number, isStarred: boolean) => {
+  toggleStar: async (id: string, isStarred: boolean) => {
     try {
       await apiService.toggleEmailStar(id, isStarred)
       set((state) => ({
@@ -352,7 +480,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     }
   },
 
-  deleteEmail: async (id: number) => {
+  deleteEmail: async (id: string) => {
     try {
       await apiService.deleteEmail(id)
       set((state) => ({
@@ -364,7 +492,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     }
   },
 
-  deleteEmails: async (ids: number[]) => {
+  deleteEmails: async (ids: string[]) => {
     try {
       await apiService.deleteEmails(ids)
       set((state) => ({
@@ -375,6 +503,22 @@ export const useEmailStore = create<EmailState>((set, get) => ({
       console.error('Failed to delete emails:', error)
       throw error
     }
+  },
+
+  archiveEmail: (id: string) => {
+    // Optimistically remove email from local state (API call handled separately)
+    set((state) => ({
+      emails: state.emails.filter((email) => email.id !== id),
+      selectedEmail: state.selectedEmail?.id === id ? null : state.selectedEmail,
+    }))
+  },
+
+  snoozeEmail: (id: string) => {
+    // Optimistically remove email from local state (API call handled separately)
+    set((state) => ({
+      emails: state.emails.filter((email) => email.id !== id),
+      selectedEmail: state.selectedEmail?.id === id ? null : state.selectedEmail,
+    }))
   },
 
   setFilters: (filters) => {
@@ -455,7 +599,7 @@ export const useEmailAccountStore = create<EmailAccountState>((set) => ({
     }
   },
 
-  removeAccount: async (id: number) => {
+  removeAccount: async (id: string) => {
     try {
       await apiService.removeEmailAccount(id)
       set((state) => ({
@@ -467,7 +611,7 @@ export const useEmailAccountStore = create<EmailAccountState>((set) => ({
     }
   },
 
-  syncAccount: async (id: number) => {
+  syncAccount: async (id: string) => {
     try {
       await apiService.syncEmailAccount(id)
     } catch (error) {

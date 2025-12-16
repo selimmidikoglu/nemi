@@ -10,8 +10,10 @@ import BadgeManagement from '@/components/BadgeManagement'
 import NotificationSettings from '@/components/NotificationSettings'
 import { ThemeSettings } from '@/components/ThemeToggle'
 import { isTrackingEnabled, setTrackingEnabled } from '@/hooks/useEmailTracking'
+import { apiService, UnsubscribeSettings } from '@/lib/api'
+import { MailX, Loader2 } from 'lucide-react'
 
-type SettingsTab = 'badges' | 'account' | 'security' | 'notifications' | 'appearance' | 'privacy'
+type SettingsTab = 'badges' | 'account' | 'security' | 'notifications' | 'appearance' | 'privacy' | 'unsubscribe'
 
 export default function SettingsPage() {
   const router = useRouter()
@@ -57,7 +59,7 @@ export default function SettingsPage() {
             </button>
             <Link href="/feed" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
               <Image
-                src="/main-logo.png"
+                src="/Nemi-logo.png"
                 alt="NEMI Logo"
                 width={32}
                 height={32}
@@ -174,6 +176,19 @@ export default function SettingsPage() {
               Privacy
             </button>
 
+            <button
+              onClick={() => setActiveTab('unsubscribe')}
+              className={cn(
+                'w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg transition-colors',
+                activeTab === 'unsubscribe'
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-foreground hover:bg-accent'
+              )}
+            >
+              <MailX className="w-5 h-5" />
+              Unsubscribe
+            </button>
+
             {/* Logout button at bottom */}
             <div className="pt-4 mt-4 border-t border-border">
               <button
@@ -198,6 +213,7 @@ export default function SettingsPage() {
             {activeTab === 'notifications' && <NotificationsSettings />}
             {activeTab === 'appearance' && <AppearanceSettings />}
             {activeTab === 'privacy' && <PrivacySettings />}
+            {activeTab === 'unsubscribe' && <UnsubscribeSettingsSection />}
           </div>
         </div>
       </div>
@@ -580,6 +596,271 @@ function PrivacySettings() {
             <p className="text-sm text-muted-foreground mt-1">
               All analytics data is stored in your personal database and is never shared with third parties.
               You can disable tracking at any time and your historical data will remain intact.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function UnsubscribeSettingsSection() {
+  const [settings, setSettings] = useState<UnsubscribeSettings | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [isSaving, setIsSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const timeRangeOptions = [
+    { value: 7, label: '7 days' },
+    { value: 14, label: '14 days' },
+    { value: 30, label: '30 days' },
+    { value: 60, label: '60 days' },
+    { value: 90, label: '90 days' },
+  ]
+
+  useEffect(() => {
+    fetchSettings()
+  }, [])
+
+  const fetchSettings = async () => {
+    setIsLoading(true)
+    setError(null)
+    try {
+      const data = await apiService.getUnsubscribeSettings()
+      setSettings(data)
+    } catch (err) {
+      console.error('Failed to fetch unsubscribe settings:', err)
+      setError('Failed to load settings')
+      // Set default values if API fails
+      setSettings({
+        enabled: true,
+        timeRangeDays: 30,
+        minEmailsThreshold: 5,
+        maxOpenRateThreshold: 0.1,
+        showNotificationBadge: true,
+        inactiveDaysThreshold: 14,
+      })
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const updateSetting = async (key: keyof UnsubscribeSettings, value: any) => {
+    if (!settings) return
+
+    const newSettings = { ...settings, [key]: value }
+    setSettings(newSettings)
+
+    setIsSaving(true)
+    try {
+      await apiService.updateUnsubscribeSettings({ [key]: value })
+    } catch (err) {
+      console.error('Failed to update setting:', err)
+      // Revert on error
+      setSettings(settings)
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <Loader2 className="w-8 h-8 text-muted-foreground animate-spin" />
+      </div>
+    )
+  }
+
+  if (!settings) {
+    return (
+      <div className="text-center py-12 text-muted-foreground">
+        {error || 'Failed to load settings'}
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-2xl font-bold text-foreground mb-2">Smart Unsubscribe</h2>
+        <p className="text-muted-foreground">
+          Configure how NEMI recommends unsubscribing from low-engagement senders.
+        </p>
+      </div>
+
+      {/* Main Settings Card */}
+      <div className="bg-card border border-border rounded-lg overflow-hidden">
+        <div className="p-6 border-b border-border">
+          <h3 className="text-lg font-semibold text-foreground">Recommendation Settings</h3>
+          <p className="text-sm text-muted-foreground mt-1">
+            Customize when and how unsubscribe recommendations are generated.
+          </p>
+        </div>
+
+        <div className="p-6 space-y-6">
+          {/* Enable/Disable Toggle */}
+          <div className="flex items-center justify-between">
+            <div className="flex-1">
+              <div className="font-medium text-foreground">Enable smart recommendations</div>
+              <p className="text-sm text-muted-foreground mt-1">
+                Automatically analyze your email engagement and suggest senders to unsubscribe from.
+              </p>
+            </div>
+            <button
+              onClick={() => updateSetting('enabled', !settings.enabled)}
+              disabled={isSaving}
+              className={cn(
+                'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 disabled:opacity-50',
+                settings.enabled ? 'bg-primary' : 'bg-muted'
+              )}
+            >
+              <span
+                className={cn(
+                  'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                  settings.enabled ? 'translate-x-5' : 'translate-x-0'
+                )}
+              />
+            </button>
+          </div>
+
+          {/* Show Notification Badge Toggle */}
+          <div className="flex items-center justify-between border-t border-border pt-6">
+            <div className="flex-1">
+              <div className="font-medium text-foreground">Show notification badge</div>
+              <p className="text-sm text-muted-foreground mt-1">
+                Display a badge icon when new unsubscribe recommendations are available.
+              </p>
+            </div>
+            <button
+              onClick={() => updateSetting('showNotificationBadge', !settings.showNotificationBadge)}
+              disabled={isSaving || !settings.enabled}
+              className={cn(
+                'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 disabled:opacity-50',
+                settings.showNotificationBadge ? 'bg-primary' : 'bg-muted'
+              )}
+            >
+              <span
+                className={cn(
+                  'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                  settings.showNotificationBadge ? 'translate-x-5' : 'translate-x-0'
+                )}
+              />
+            </button>
+          </div>
+
+          {/* Time Range Selection */}
+          <div className="border-t border-border pt-6">
+            <div className="font-medium text-foreground mb-2">Analysis time range</div>
+            <p className="text-sm text-muted-foreground mb-4">
+              Only consider emails received within this time period when calculating engagement.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {timeRangeOptions.map((option) => (
+                <button
+                  key={option.value}
+                  onClick={() => updateSetting('timeRangeDays', option.value)}
+                  disabled={isSaving || !settings.enabled}
+                  className={cn(
+                    'px-4 py-2 text-sm font-medium rounded-lg transition-colors disabled:opacity-50',
+                    settings.timeRangeDays === option.value
+                      ? 'bg-primary text-primary-foreground'
+                      : 'bg-muted text-foreground hover:bg-accent'
+                  )}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Minimum Emails Threshold */}
+          <div className="border-t border-border pt-6">
+            <div className="font-medium text-foreground mb-2">Minimum emails threshold</div>
+            <p className="text-sm text-muted-foreground mb-4">
+              Only recommend unsubscribing from senders with at least this many emails.
+            </p>
+            <div className="flex items-center gap-4">
+              <input
+                type="range"
+                min={3}
+                max={20}
+                value={settings.minEmailsThreshold}
+                onChange={(e) => updateSetting('minEmailsThreshold', parseInt(e.target.value))}
+                disabled={isSaving || !settings.enabled}
+                className="flex-1 h-2 bg-muted rounded-lg appearance-none cursor-pointer disabled:opacity-50"
+              />
+              <span className="w-12 text-sm font-medium text-foreground text-right">
+                {settings.minEmailsThreshold} emails
+              </span>
+            </div>
+          </div>
+
+          {/* Maximum Open Rate Threshold */}
+          <div className="border-t border-border pt-6">
+            <div className="font-medium text-foreground mb-2">Maximum open rate</div>
+            <p className="text-sm text-muted-foreground mb-4">
+              Recommend unsubscribing from senders with an open rate below this percentage.
+            </p>
+            <div className="flex items-center gap-4">
+              <input
+                type="range"
+                min={5}
+                max={50}
+                step={5}
+                value={Math.round(settings.maxOpenRateThreshold * 100)}
+                onChange={(e) => updateSetting('maxOpenRateThreshold', parseInt(e.target.value) / 100)}
+                disabled={isSaving || !settings.enabled}
+                className="flex-1 h-2 bg-muted rounded-lg appearance-none cursor-pointer disabled:opacity-50"
+              />
+              <span className="w-12 text-sm font-medium text-foreground text-right">
+                {Math.round(settings.maxOpenRateThreshold * 100)}%
+              </span>
+            </div>
+          </div>
+
+          {/* Inactive Days Threshold */}
+          <div className="border-t border-border pt-6">
+            <div className="font-medium text-foreground mb-2">Inactive sender threshold</div>
+            <p className="text-sm text-muted-foreground mb-4">
+              Suggest unsubscribing from senders you haven't opened any email from in this many days.
+              This catches senders you used to read but no longer engage with.
+            </p>
+            <div className="flex items-center gap-4">
+              <input
+                type="range"
+                min={7}
+                max={90}
+                step={7}
+                value={settings.inactiveDaysThreshold || 14}
+                onChange={(e) => updateSetting('inactiveDaysThreshold', parseInt(e.target.value))}
+                disabled={isSaving || !settings.enabled}
+                className="flex-1 h-2 bg-muted rounded-lg appearance-none cursor-pointer disabled:opacity-50"
+              />
+              <span className="w-16 text-sm font-medium text-foreground text-right">
+                {settings.inactiveDaysThreshold || 14} days
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* How It Works Info */}
+      <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-4">
+        <div className="flex items-start gap-3">
+          <svg className="w-5 h-5 text-blue-500 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <div>
+            <p className="text-sm font-medium text-foreground">How smart unsubscribe works</p>
+            <p className="text-sm text-muted-foreground mt-1">
+              NEMI recommends unsubscribing based on two criteria:
+            </p>
+            <ul className="text-sm text-muted-foreground mt-2 space-y-1 list-disc list-inside">
+              <li><strong>Low engagement:</strong> Senders with many emails but very low open rate (you never read them)</li>
+              <li><strong>Inactive senders:</strong> Senders you used to read but haven't opened in a while</li>
+            </ul>
+            <p className="text-sm text-muted-foreground mt-2">
+              Senders you actively read are never recommended for unsubscribe.
             </p>
           </div>
         </div>

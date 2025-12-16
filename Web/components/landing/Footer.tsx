@@ -48,7 +48,7 @@ export function Footer() {
             <Link href="/" className="flex items-center gap-2 mb-4">
               <div className="relative w-10 h-10">
                 <Image
-                  src="/main-logo.png"
+                  src="/Nemi-logo.png"
                   alt="NEMI"
                   fill
                   className="object-contain"

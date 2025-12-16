@@ -6,6 +6,9 @@ import { apiService } from '@/lib/api'
 // Minimum time (in seconds) before a view session is considered valid
 const MIN_VIEW_DURATION_SECONDS = 3
 
+// Maximum time (in seconds) to cap reading sessions - prevents inflated stats from leaving emails open
+const MAX_VIEW_DURATION_SECONDS = 120 // 2 minutes max
+
 interface ViewSession {
   sessionId: string
   emailId: string
@@ -65,7 +68,9 @@ export function useEmailTracking(emailId: string | null) {
     isEndingSession.current = true
     const session = sessionRef.current
     const closedAt = new Date()
-    const durationSeconds = Math.floor((closedAt.getTime() - session.openedAt.getTime()) / 1000)
+    const rawDuration = Math.floor((closedAt.getTime() - session.openedAt.getTime()) / 1000)
+    // Cap duration to prevent inflated stats from leaving emails open
+    const durationSeconds = Math.min(rawDuration, MAX_VIEW_DURATION_SECONDS)
 
     // Only save sessions that meet the minimum duration threshold
     if (durationSeconds >= MIN_VIEW_DURATION_SECONDS) {
@@ -185,7 +190,9 @@ export function useEmailTracking(emailId: string | null) {
 
         const session = sessionRef.current
         const closedAt = new Date()
-        const durationSeconds = Math.floor((closedAt.getTime() - session.openedAt.getTime()) / 1000)
+        const rawDuration = Math.floor((closedAt.getTime() - session.openedAt.getTime()) / 1000)
+        // Cap duration to prevent inflated stats from leaving emails open
+        const durationSeconds = Math.min(rawDuration, MAX_VIEW_DURATION_SECONDS)
 
         // Only save if meets minimum threshold
         if (durationSeconds >= MIN_VIEW_DURATION_SECONDS) {
@@ -243,4 +250,26 @@ export function setTrackingEnabled(enabled: boolean): void {
 // Export utility function to check if tracking is enabled
 export function isTrackingEnabled(): boolean {
   return getTrackingSettings().enabled
+}
+
+/**
+ * Track a link click from an HTML card without needing an active session.
+ * This is used when users click links in the email list preview without opening the full email.
+ */
+export async function trackHtmlCardLinkClick(emailId: string, url: string): Promise<void> {
+  const settings = getTrackingSettings()
+  if (!settings.enabled) return
+
+  try {
+    await apiService.recordEngagementEvent({
+      event_type: 'link_clicked',
+      email_id: emailId,
+      event_data: {
+        source: 'html_card',
+        url: url,
+      }
+    })
+  } catch (error) {
+    console.error('Failed to record HTML card link click:', error)
+  }
 }

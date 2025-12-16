@@ -6,16 +6,21 @@ import type { Email, EmailAddress } from '@/types'
 import EmailHtmlCard from './EmailHtmlCard'
 import EmailAddressTooltip from './EmailAddressTooltip'
 import EmailCompose, { SendEmailData } from './EmailCompose'
-import { AtSign, Reply } from 'lucide-react'
+import { AtSign, Reply, Clock, Archive, ArchiveRestore } from 'lucide-react'
+import SnoozeModal from './SnoozeModal'
 
 interface EmailDetailProps {
   email: Email
   onClose: () => void
-  onDelete: (id: number) => void
-  onToggleStar: (id: number, isStarred: boolean) => void
-  onMarkAsRead: (id: number, isRead: boolean) => void
+  onDelete: (id: string) => void
+  onToggleStar: (id: string, isStarred: boolean) => void
+  onMarkAsRead: (id: string, isRead: boolean) => void
   onSendEmail: (emailData: SendEmailData) => Promise<void>
   onLinkClick?: (url?: string) => void
+  onSnooze?: (id: string, snoozeUntil: Date) => Promise<void>
+  onUnsnooze?: (id: string) => Promise<void>
+  onArchive?: (id: string) => Promise<void>
+  onUnarchive?: (id: string) => Promise<void>
 }
 
 export default function EmailDetail({
@@ -26,8 +31,13 @@ export default function EmailDetail({
   onMarkAsRead,
   onSendEmail,
   onLinkClick,
+  onSnooze,
+  onUnsnooze,
+  onArchive,
+  onUnarchive,
 }: EmailDetailProps) {
   const [showCompose, setShowCompose] = useState(false)
+  const [showSnoozeModal, setShowSnoozeModal] = useState(false)
 
   const handleDelete = () => {
     if (confirm('Are you sure you want to delete this email?')) {
@@ -51,37 +61,37 @@ export default function EmailDetail({
 
   return (
     <div className="flex flex-col h-full bg-white dark:bg-gray-900">
-      {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
+      {/* Header - Compact */}
+      <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200 dark:border-gray-700">
         <button
           onClick={onClose}
-          className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
+          className="p-1 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-white rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
         >
-          <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
           </svg>
         </button>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1">
           <button
             onClick={handleReply}
-            className="p-2 text-gray-600 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
+            className="p-1.5 text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
             title="Reply"
           >
-            <Reply className="w-5 h-5" />
+            <Reply className="w-4 h-4" />
           </button>
 
           <button
             onClick={() => onToggleStar(email.id, !email.isStarred)}
-            className="p-2 text-gray-600 dark:text-gray-400 hover:text-yellow-500 transition-colors"
+            className="p-1.5 text-gray-500 dark:text-gray-400 hover:text-yellow-500 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
             title={email.isStarred ? 'Unstar' : 'Star'}
           >
             {email.isStarred ? (
-              <svg className="w-5 h-5 text-yellow-500 fill-current" viewBox="0 0 20 20">
+              <svg className="w-4 h-4 text-yellow-500 fill-current" viewBox="0 0 20 20">
                 <path d="M10 15l-5.878 3.09 1.123-6.545L.489 6.91l6.572-.955L10 0l2.939 5.955 6.572.955-4.756 4.635 1.123 6.545z" />
               </svg>
             ) : (
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 20 20" stroke="currentColor">
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 20 20" stroke="currentColor">
                 <path
                   strokeLinecap="round"
                   strokeLinejoin="round"
@@ -94,10 +104,10 @@ export default function EmailDetail({
 
           <button
             onClick={() => onMarkAsRead(email.id, !email.isRead)}
-            className="p-2 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors"
+            className="p-1.5 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-white rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
             title={email.isRead ? 'Mark as unread' : 'Mark as read'}
           >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path
                 strokeLinecap="round"
                 strokeLinejoin="round"
@@ -107,12 +117,54 @@ export default function EmailDetail({
             </svg>
           </button>
 
+          {/* Snooze button */}
+          {onSnooze && (
+            email.snoozedUntil ? (
+              <button
+                onClick={() => onUnsnooze?.(email.id)}
+                className="p-1.5 text-orange-500 hover:text-orange-600 dark:text-orange-400 dark:hover:text-orange-300 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+                title={`Snoozed until ${new Date(email.snoozedUntil).toLocaleString()} - Click to unsnooze`}
+              >
+                <Clock className="w-4 h-4" />
+              </button>
+            ) : (
+              <button
+                onClick={() => setShowSnoozeModal(true)}
+                className="p-1.5 text-gray-500 dark:text-gray-400 hover:text-orange-500 dark:hover:text-orange-400 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+                title="Snooze"
+              >
+                <Clock className="w-4 h-4" />
+              </button>
+            )
+          )}
+
+          {/* Archive button */}
+          {(onArchive || onUnarchive) && (
+            email.isArchived ? (
+              <button
+                onClick={() => onUnarchive?.(email.id)}
+                className="p-1.5 text-green-500 hover:text-green-600 dark:text-green-400 dark:hover:text-green-300 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+                title="Unarchive"
+              >
+                <ArchiveRestore className="w-4 h-4" />
+              </button>
+            ) : (
+              <button
+                onClick={() => onArchive?.(email.id)}
+                className="p-1.5 text-gray-500 dark:text-gray-400 hover:text-green-500 dark:hover:text-green-400 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+                title="Archive"
+              >
+                <Archive className="w-4 h-4" />
+              </button>
+            )
+          )}
+
           <button
             onClick={handleDelete}
-            className="p-2 text-gray-600 dark:text-gray-400 hover:text-red-600 dark:hover:text-red-400 transition-colors"
+            className="p-1.5 text-gray-500 dark:text-gray-400 hover:text-red-600 dark:hover:text-red-400 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
             title="Delete"
           >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path
                 strokeLinecap="round"
                 strokeLinejoin="round"
@@ -182,37 +234,58 @@ export default function EmailDetail({
               )}
             </div>
 
-            <div className="flex flex-wrap gap-2 justify-end">
-              {/* NEW: "About Me" badge if user is @mentioned */}
+            <div className="flex flex-wrap gap-1.5 justify-end">
+              {/* "About Me" badge if user is @mentioned */}
               {email.isAboutMe && (
                 <span
-                  className="px-2 py-1 text-xs font-medium bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-200 rounded-full flex items-center gap-1"
+                  className="px-2 py-0.5 text-xs font-medium bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-200 rounded-full flex items-center gap-1"
                   title={email.mentionContext || 'You are mentioned in this email'}
                 >
                   <AtSign className="w-3 h-3" />
                   {email.mentionContext || 'Mentions You'}
                 </span>
               )}
-              {email.importance && (
+              {/* Only show importance if it's critical or high (meaningful) */}
+              {email.importance && (email.importance === 'critical' || email.importance === 'high') && (
                 <span
-                  className={`px-2 py-1 text-xs font-medium rounded-full ${
+                  className={`px-2 py-0.5 text-xs font-medium rounded-full ${
                     email.importance === 'critical'
                       ? 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
-                      : email.importance === 'high'
-                      ? 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200'
-                      : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200'
+                      : 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200'
                   }`}
                 >
                   {email.importance}
                 </span>
               )}
-              {email.category && (
-                <span className="px-2 py-1 text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 rounded-full">
+              {/* Only show category if it's meaningful (not "Other") */}
+              {email.category && email.category !== 'Other' && (
+                <span className="px-2 py-0.5 text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 rounded-full">
                   {email.category}
                 </span>
               )}
-              {email.isMeRelated && (
-                <span className="px-2 py-1 text-xs font-medium bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200 rounded-full">
+              {/* AI-generated badges - filter out non-meaningful ones */}
+              {email.badges && email.badges.length > 0 && email.badges
+                .filter(badge => {
+                  const name = badge.name?.toLowerCase() || '';
+                  // Filter out importance levels and generic categories
+                  const excludedNames = ['low', 'normal', 'high', 'critical', 'other', 'general', 'misc'];
+                  return !excludedNames.includes(name);
+                })
+                .map((badge, index) => (
+                <span
+                  key={index}
+                  className="px-2 py-0.5 text-xs font-medium rounded-full"
+                  style={{
+                    backgroundColor: badge.color ? `${badge.color}20` : undefined,
+                    color: badge.color || undefined,
+                  }}
+                  title={badge.category}
+                >
+                  {badge.name}
+                </span>
+              ))}
+              {email.isMeRelated && !email.isAboutMe && (
+                <span className="px-2 py-0.5 text-xs font-medium bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200 rounded-full">
                   Me-related
                 </span>
               )}
@@ -303,6 +376,17 @@ export default function EmailDetail({
           onSend={handleSendEmail}
           replyTo={email}
           emailAccountId={email.emailAccountId}
+        />
+      )}
+
+      {/* Snooze Modal */}
+      {showSnoozeModal && onSnooze && (
+        <SnoozeModal
+          onClose={() => setShowSnoozeModal(false)}
+          onSnooze={(snoozeUntil) => {
+            onSnooze(email.id, snoozeUntil)
+            setShowSnoozeModal(false)
+          }}
         />
       )}
     </div>

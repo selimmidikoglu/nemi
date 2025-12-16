@@ -12,6 +12,9 @@ router.use(authMiddleware);
 // Get supported email providers
 router.get('/providers', controller.getProviders);
 
+// Get sync status for all accounts (for initial sync indicator)
+router.get('/sync-status', controller.getSyncStatus);
+
 // Email account CRUD
 router.post('/', controller.addEmailAccount);
 router.get('/', controller.getEmailAccounts);

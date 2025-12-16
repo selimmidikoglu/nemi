@@ -23,7 +23,7 @@ export interface EmailAddress {
 
 // Email types
 export interface Email {
-  id: number
+  id: string
   messageId: string
   threadId?: string | null  // Gmail's native thread ID for conversation grouping
   subject: string
@@ -49,7 +49,7 @@ export interface Email {
   companyDomain?: string | null
   companyLogoUrl?: string | null
   senderProfilePhotoUrl?: string | null  // Real profile photo from Google People API
-  emailAccountId: number
+  emailAccountId: string
   createdAt: string
   updatedAt: string
 
@@ -66,12 +66,16 @@ export interface Email {
     standard: string             // Professional 2-3 sentence reply (30-50 words)
     detailed: string             // Comprehensive response (60-100 words)
   } | null
+
+  // Snooze and Archive features
+  snoozedUntil?: string | null   // ISO timestamp when snooze expires
+  isArchived?: boolean           // Whether email is archived
 }
 
 // Email Account types
 export interface EmailAccount {
-  id: number
-  userId: number
+  id: string
+  userId: string
   provider: 'gmail' | 'outlook' | 'imap'
   email: string
   isActive: boolean
@@ -82,8 +86,8 @@ export interface EmailAccount {
 
 // Classification types
 export interface EmailClassification {
-  id: number
-  emailId: number
+  id: string
+  emailId: string
   category: string
   importance: 'critical' | 'high' | 'normal' | 'low'
   isMeRelated: boolean
@@ -157,4 +161,6 @@ export interface EmailQueryParams {
   importance?: string
   isMeRelated?: boolean
   search?: string
+  badgeName?: string
+  emailAccountId?: number
 }

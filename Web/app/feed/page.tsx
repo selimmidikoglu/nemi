@@ -1,23 +1,29 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useState, useRef } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
-import { Search, List, Rows, X } from "lucide-react";
+import { Search, List, Rows, X, SlidersHorizontal, ChevronDown, Minus } from "lucide-react";
+import UndoToast, { useUndoToast } from "@/components/UndoToast";
+import UnsubscribeNotification from "@/components/UnsubscribeNotification";
+import SyncStatusIndicator from "@/components/SyncStatusIndicator";
 import { useAuthStore, useEmailStore } from "@/lib/store";
 import EmailList from "@/components/EmailList";
 import EmailDetail from "@/components/EmailDetail";
 import EmailFilters from "@/components/EmailFilters";
 import EmailSidebar from "@/components/EmailSidebar";
+import { SendEmailData } from "@/components/EmailCompose";
+import GmailCompose from "@/components/GmailCompose";
+import AdvancedSearchModal from "@/components/AdvancedSearchModal";
 import { useEmailPolling } from "@/hooks/useEmailPolling";
 import { useGmailPush } from "@/hooks/useGmailPush";
 import { useNotifications } from "@/hooks/useNotifications";
-import { useEmailTracking } from "@/hooks/useEmailTracking";
-import type { SendEmailData } from "@/components/EmailCompose";
+import { useEmailTracking, trackHtmlCardLinkClick } from "@/hooks/useEmailTracking";
 
 export default function FeedPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { isAuthenticated, isLoading: authLoading, checkAuth, logout, user } = useAuthStore();
   const {
     emails,
@@ -28,8 +34,8 @@ export default function FeedPage() {
     markAsRead,
     toggleStar,
     deleteEmail,
-    deleteEmails,
-    syncEmails,
+    archiveEmail: removeEmailFromList,
+    snoozeEmail: removeSnoozeEmailFromList,
     setFilters,
     filters,
     viewMode,
@@ -42,17 +48,56 @@ export default function FeedPage() {
     allEmailsCount,
     setPage,
     addPushedEmails,
+    refreshKey,
   } = useEmailStore();
 
-  const [isSyncing, setIsSyncing] = useState(false);
   const [activeBadge, setActiveBadge] = useState<string | null>(null);
-  const [activeFolder, setActiveFolder] = useState<string>("all");
-  const [selectedAccountId, setSelectedAccountId] = useState<number | undefined>();
+  const [activeFolder, setActiveFolder] = useState<string>(() => {
+    // Initialize from URL params
+    const folder = searchParams.get('folder');
+    const accountId = searchParams.get('accountId');
+    if (folder && accountId) {
+      return `${accountId}-${folder}`;
+    }
+    return "all";
+  });
+
+  // Undo toast for delete/archive/snooze actions
+  const { currentAction, showToast, dismissToast } = useUndoToast();
+  const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
+  const [emailAccounts, setEmailAccounts] = useState<{ id: string; email: string }[]>([]);
   const [emailListWidth, setEmailListWidth] = useState(35); // percentage
   const [isResizing, setIsResizing] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   // const [analysisProgress, setAnalysisProgress] = useState<{ analyzed: number; total: number } | null>(null);
   const [searchInput, setSearchInput] = useState(searchQuery);
+  const [showComposeModal, setShowComposeModal] = useState(false);
+  const [showAdvancedSearch, setShowAdvancedSearch] = useState(false);
+  const [advancedSearchFilters, setAdvancedSearchFilters] = useState<any>(null);
+  const [showViewModeDropdown, setShowViewModeDropdown] = useState(false);
+
+  // Fetch email accounts on mount to enable compose
+  useEffect(() => {
+    const fetchAccounts = async () => {
+      try {
+        const token = localStorage.getItem('accessToken');
+        const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/email-accounts`, {
+          headers: { 'Authorization': `Bearer ${token}` },
+        });
+        if (response.ok) {
+          const data = await response.json();
+          const accounts = (data.email_accounts || []).map((a: any) => ({ id: a.id, email: a.email_address }));
+          setEmailAccounts(accounts);
+          // Don't auto-select - keep "All Emails" as default (selectedAccountId = null)
+        }
+      } catch (error) {
+        console.error('Failed to fetch email accounts:', error);
+      }
+    };
+    if (isAuthenticated) {
+      fetchAccounts();
+    }
+  }, [isAuthenticated]);
 
   // Email tracking for analytics
   const { trackLinkClick } = useEmailTracking(selectedEmail?.id?.toString() || null);
@@ -153,6 +198,48 @@ export default function FeedPage() {
     }
   }, [isAuthenticated, authLoading, router, fetchEmails]);
 
+  // Sync URL params with folder state on mount (run once when authenticated)
+  const hasInitializedFromUrl = useRef(false);
+  useEffect(() => {
+    if (!isAuthenticated || hasInitializedFromUrl.current) return;
+
+    const folder = searchParams.get('folder');
+    const accountId = searchParams.get('accountId');
+
+    if (folder && accountId) {
+      hasInitializedFromUrl.current = true;
+      setActiveFolder(`${accountId}-${folder}`);
+      setSelectedAccountId(accountId);
+
+      // Apply filters based on URL folder
+      const newFilters: any = { emailAccountId: accountId };
+
+      if (folder === "sent") {
+        newFilters.specialFolder = "sent";
+      } else if (folder === "spam") {
+        newFilters.specialFolder = "spam";
+      } else if (folder === "automated") {
+        newFilters.badgeName = "Automated";
+      } else if (folder === "promotional") {
+        newFilters.badgeName = "Promotional";
+      } else if (folder === "newsletter") {
+        newFilters.badgeName = "Newsletter";
+      } else if (folder === "starred") {
+        newFilters.specialFolder = "starred";
+      } else if (folder === "snoozed") {
+        newFilters.specialFolder = "snoozed";
+      } else if (folder === "archived") {
+        newFilters.specialFolder = "archived";
+      } else if (folder === "deleted") {
+        newFilters.specialFolder = "deleted";
+      } else if (folder === "shopping") {
+        newFilters.badgeName = "Shopping";
+      }
+
+      setFilters(newFilters);
+    }
+  }, [isAuthenticated, searchParams, setFilters]);
+
   // Poll for analysis progress - COMMENTED OUT
   // useEffect(() => {
   //   if (!isAuthenticated) return;
@@ -183,6 +270,20 @@ export default function FeedPage() {
   //   return () => clearInterval(interval);
   // }, [isAuthenticated]);
 
+  // Close view mode dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (showViewModeDropdown) {
+        setShowViewModeDropdown(false);
+      }
+    };
+    if (showViewModeDropdown) {
+      // Delay adding listener to avoid immediate close
+      setTimeout(() => document.addEventListener('click', handleClickOutside), 0);
+    }
+    return () => document.removeEventListener('click', handleClickOutside);
+  }, [showViewModeDropdown]);
+
   // Debounce search input and trigger backend search
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -199,59 +300,123 @@ export default function FeedPage() {
       // setFilters already resets page to 1 and calls fetchEmails
       setFilters({ ...filters, badgeName });
     } else {
-      // Remove badgeName from filters
-      const { badgeName: _, ...restFilters } = filters;
-      setFilters(restFilters);
+      // Clicking "All" clears all filters including search
+      setSearchInput("");
+      setAdvancedSearchFilters(null);
+      setFilters({});
     }
   };
 
   // Use emails directly from store (server-side filtered)
   const filteredEmails = emails;
 
-  const handleSync = async () => {
-    setIsSyncing(true);
-    try {
-      await syncEmails();
-    } finally {
-      setIsSyncing(false);
-    }
-  };
-
   const handleLogout = async () => {
     await logout();
     router.push("/login");
   };
 
-  const handleFolderChange = (folder: string, accountId?: number) => {
-    setActiveFolder(`${accountId}-${folder}`);
-    setSelectedAccountId(accountId);
+  const handleFolderChange = (folder: string, accountId?: string | null) => {
+    // Handle navigation links (no accountId)
+    if (folder === "analytics") {
+      router.push("/analytics");
+      return;
+    } else if (folder === "badges") {
+      router.push("/settings?tab=badges");
+      return;
+    } else if (folder === "unsubscribe") {
+      router.push("/unsubscribe");
+      return;
+    }
+
+    // Set active folder - use "all-folder" format for all emails, "accountId-folder" for specific accounts
+    if (accountId === null || accountId === undefined) {
+      setActiveFolder(`all-${folder}`);
+      setSelectedAccountId(null);
+    } else {
+      setActiveFolder(`${accountId}-${folder}`);
+      setSelectedAccountId(accountId);
+    }
+
+    // Update URL to persist folder selection
+    if (accountId && folder) {
+      const params = new URLSearchParams();
+      params.set('folder', folder);
+      params.set('accountId', String(accountId));
+      router.replace(`/feed?${params.toString()}`, { scroll: false });
+    } else {
+      // Clear URL params when going to "all" or no specific folder
+      router.replace('/feed', { scroll: false });
+    }
 
     // Update filters based on folder selection
     const newFilters: any = {};
 
-    if (accountId) {
+    // Only add emailAccountId filter if a specific account is selected
+    if (accountId !== null && accountId !== undefined) {
       newFilters.emailAccountId = accountId;
     }
+    // When accountId is null, don't add emailAccountId - shows all accounts
 
     if (folder === "sent") {
-      // TODO: Add sent folder filter when backend supports it
-      newFilters.isSent = true;
+      newFilters.specialFolder = "sent";
     } else if (folder === "spam") {
-      // TODO: Add spam folder filter when backend supports it
-      newFilters.isSpam = true;
+      newFilters.specialFolder = "spam";
+    } else if (folder === "about-you") {
+      newFilters.isPersonallyRelevant = true; // Premium feature - AI-detected personally relevant emails
     } else if (folder === "automated") {
-      // Filter by Automated badge
       newFilters.badgeName = "Automated";
     } else if (folder === "promotional") {
-      // Filter by Promotional badge
       newFilters.badgeName = "Promotional";
     } else if (folder === "newsletter") {
-      // Filter by Newsletter badge
       newFilters.badgeName = "Newsletter";
+    } else if (folder === "starred") {
+      newFilters.specialFolder = "starred";
+    } else if (folder === "snoozed") {
+      newFilters.specialFolder = "snoozed";
+    } else if (folder === "archived") {
+      newFilters.specialFolder = "archived";
+    } else if (folder === "deleted") {
+      newFilters.specialFolder = "deleted";
+    } else if (folder === "shopping") {
+      newFilters.badgeName = "Shopping";
     }
 
+    // setFilters already calls fetchEmails internally
     setFilters(newFilters);
-    fetchEmails();
+  };
+
+  // Handle advanced search
+  const handleAdvancedSearch = async (searchFilters: any) => {
+    setAdvancedSearchFilters(searchFilters);
+
+    // Build query string for API
+    const params = new URLSearchParams();
+    if (searchFilters.from) params.set('from', searchFilters.from);
+    if (searchFilters.to) params.set('to', searchFilters.to);
+    if (searchFilters.subject) params.set('subject', searchFilters.subject);
+    if (searchFilters.hasWords) params.set('hasWords', searchFilters.hasWords);
+    if (searchFilters.doesntHave) params.set('doesntHave', searchFilters.doesntHave);
+    if (searchFilters.hasAttachment !== undefined) params.set('hasAttachment', String(searchFilters.hasAttachment));
+    if (searchFilters.dateWithin) params.set('dateWithin', String(searchFilters.dateWithin));
+    if (searchFilters.dateFrom) params.set('dateFrom', searchFilters.dateFrom);
+    if (searchFilters.dateTo) params.set('dateTo', searchFilters.dateTo);
+
+    // Update search input to show what's being searched
+    const searchTerms = [];
+    if (searchFilters.from) searchTerms.push(`from:${searchFilters.from}`);
+    if (searchFilters.to) searchTerms.push(`to:${searchFilters.to}`);
+    if (searchFilters.subject) searchTerms.push(`subject:${searchFilters.subject}`);
+    if (searchFilters.hasWords) searchTerms.push(searchFilters.hasWords);
+    if (searchFilters.hasAttachment) searchTerms.push('has:attachment');
+    if (searchFilters.dateWithin) searchTerms.push(`within:${searchFilters.dateWithin}d`);
+    setSearchInput(searchTerms.join(' '));
+
+    // Set advanced filters in the store - setFilters already calls fetchEmails internally
+    setFilters({
+      ...filters,
+      advancedSearch: searchFilters
+    });
+    // Note: Don't call fetchEmails() here - setFilters already triggers it
   };
 
   const handleMouseDown = () => {
@@ -298,6 +463,179 @@ export default function FeedPage() {
     }
   };
 
+  const handleSnoozeEmail = async (id: string, snoozeUntil: Date) => {
+    // Optimistically remove from UI immediately
+    removeSnoozeEmailFromList(id);
+
+    try {
+      const response = await fetch(`http://localhost:3000/api/emails/${id}/snooze`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("accessToken")}`,
+        },
+        body: JSON.stringify({ snoozeUntil: snoozeUntil.toISOString() }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        // On error, refresh to restore the email
+        fetchEmails();
+        throw new Error(error.message || "Failed to snooze email");
+      }
+
+      console.log("Email snoozed successfully");
+    } catch (error) {
+      console.error("Error snoozing email:", error);
+      throw error;
+    }
+  };
+
+  const handleUnsnoozeEmail = async (id: string) => {
+    try {
+      const response = await fetch(`http://localhost:3000/api/emails/${id}/snooze`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("accessToken")}`,
+        },
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || "Failed to unsnooze email");
+      }
+
+      console.log("Email unsnoozed successfully");
+      fetchEmails(); // Refresh to update UI
+    } catch (error) {
+      console.error("Error unsnoozing email:", error);
+      throw error;
+    }
+  };
+
+  const handleArchiveEmail = async (id: string) => {
+    // Find email subject before removing from list
+    const email = emails.find(e => e.id === id);
+    const emailSubject = email?.subject || "Email";
+
+    // Optimistically remove from UI immediately
+    removeEmailFromList(id);
+
+    try {
+      const response = await fetch(`http://localhost:3000/api/emails/${id}/archive`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("accessToken")}`,
+        },
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        // On error, refresh to restore the email
+        fetchEmails();
+        throw new Error(error.message || "Failed to archive email");
+      }
+
+      console.log("Email archived successfully");
+
+      // Show undo toast
+      showToast({
+        type: "archive",
+        message: "Email archived",
+        emailId: id,
+        emailSubject,
+        onUndo: async () => {
+          await handleUnarchiveEmail(id);
+          fetchEmails(); // Refresh to show restored email
+        },
+      });
+    } catch (error) {
+      console.error("Error archiving email:", error);
+      throw error;
+    }
+  };
+
+  const handleUnarchiveEmail = async (id: string) => {
+    try {
+      const response = await fetch(`http://localhost:3000/api/emails/${id}/archive`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("accessToken")}`,
+        },
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || "Failed to unarchive email");
+      }
+
+      console.log("Email unarchived successfully");
+      fetchEmails(); // Refresh to update UI
+    } catch (error) {
+      console.error("Error unarchiving email:", error);
+      throw error;
+    }
+  };
+
+  // Soft delete (move to trash) with undo functionality
+  const handleSoftDeleteEmails = async (ids: string[]) => {
+    // Find email info before removing from list
+    const emailsToDelete = emails.filter(e => ids.includes(e.id));
+    const firstEmail = emailsToDelete[0];
+    const emailSubject = firstEmail?.subject || "Email";
+    const message = ids.length === 1 ? "Email moved to trash" : `${ids.length} emails moved to trash`;
+
+    // Optimistically remove from UI immediately
+    ids.forEach(id => removeEmailFromList(id));
+
+    try {
+      // Use soft delete for each email
+      const promises = ids.map(id =>
+        fetch(`http://localhost:3000/api/emails/${id}/trash`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem("accessToken")}`,
+          },
+        })
+      );
+
+      const responses = await Promise.all(promises);
+      const failedResponses = responses.filter(r => !r.ok);
+
+      if (failedResponses.length > 0) {
+        // On error, refresh to restore emails
+        fetchEmails();
+        throw new Error("Failed to delete some emails");
+      }
+
+      console.log("Emails moved to trash successfully");
+
+      // Show undo toast
+      showToast({
+        type: "delete",
+        message,
+        emailId: ids[0],
+        emailSubject: ids.length === 1 ? emailSubject : undefined,
+        onUndo: async () => {
+          // Restore all emails from trash
+          const restorePromises = ids.map(id =>
+            fetch(`http://localhost:3000/api/emails/${id}/trash`, {
+              method: "DELETE",
+              headers: {
+                Authorization: `Bearer ${localStorage.getItem("accessToken")}`,
+              },
+            })
+          );
+          await Promise.all(restorePromises);
+          fetchEmails(); // Refresh to show restored emails
+        },
+      });
+    } catch (error) {
+      console.error("Error moving emails to trash:", error);
+      throw error;
+    }
+  };
+
   useEffect(() => {
     if (isResizing) {
       document.addEventListener("mousemove", handleMouseMove as any);
@@ -333,39 +671,86 @@ export default function FeedPage() {
               </svg>
             </button>
             <Link href="/feed" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
-              <Image src="/main-logo.png" alt="NEMI Logo" width={32} height={32} className="rounded" priority />
+              <Image src="/Nemi-logo.png" alt="NEMI Logo" width={32} height={32} className="rounded" priority />
               <h1 className="text-2xl font-bold text-foreground">NEMI</h1>
             </Link>
 
-            {/* View Toggle */}
-            <button
-              onClick={() => setViewMode(viewMode === "compact" ? "detailed" : "compact")}
-              className="flex items-center gap-2 px-3 py-2 text-sm text-foreground hover:bg-accent rounded-lg transition-colors"
-              title={viewMode === "compact" ? "Switch to detailed view" : "Switch to compact view"}
-            >
-              {viewMode === "compact" ? <Rows className="w-4 h-4" /> : <List className="w-4 h-4" />}
-            </button>
+            {/* View Mode Dropdown */}
+            <div className="relative">
+              <button
+                onClick={() => setShowViewModeDropdown(!showViewModeDropdown)}
+                className="flex items-center gap-2 px-3 py-2 text-sm text-foreground hover:bg-accent rounded-lg transition-colors"
+                title="Change view mode"
+              >
+                {viewMode === "minimal" ? <Minus className="w-4 h-4" /> : viewMode === "compact" ? <List className="w-4 h-4" /> : <Rows className="w-4 h-4" />}
+                <ChevronDown className="w-3 h-3" />
+              </button>
+              {showViewModeDropdown && (
+                <div className="absolute top-full left-0 mt-1 bg-card border border-border rounded-lg shadow-lg py-1 z-50 min-w-[140px]">
+                  <button
+                    onClick={() => { setViewMode("minimal"); setShowViewModeDropdown(false); }}
+                    className={`w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent transition-colors ${viewMode === "minimal" ? "bg-accent text-primary" : "text-foreground"}`}
+                  >
+                    <Minus className="w-4 h-4" />
+                    Minimal
+                  </button>
+                  <button
+                    onClick={() => { setViewMode("compact"); setShowViewModeDropdown(false); }}
+                    className={`w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent transition-colors ${viewMode === "compact" ? "bg-accent text-primary" : "text-foreground"}`}
+                  >
+                    <List className="w-4 h-4" />
+                    Compact
+                  </button>
+                  <button
+                    onClick={() => { setViewMode("detailed"); setShowViewModeDropdown(false); }}
+                    className={`w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent transition-colors ${viewMode === "detailed" ? "bg-accent text-primary" : "text-foreground"}`}
+                  >
+                    <Rows className="w-4 h-4" />
+                    Detailed
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Search Bar - Centered */}
           <div className="flex-1 flex items-center justify-center px-8 max-w-2xl mx-auto">
-            <div className="relative w-full">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-              <input
-                type="text"
-                placeholder="Search emails..."
-                value={searchInput}
-                onChange={(e) => setSearchInput(e.target.value)}
-                className="w-full pl-10 pr-10 py-2 text-sm bg-muted border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all"
-              />
-              {searchInput && (
-                <button
-                  onClick={() => setSearchInput("")}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              )}
+            <div className="relative w-full flex items-center gap-2">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                <input
+                  type="text"
+                  placeholder="Search emails..."
+                  value={searchInput}
+                  onChange={(e) => setSearchInput(e.target.value)}
+                  className="w-full pl-10 pr-10 py-2 text-sm bg-muted border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all"
+                />
+                {(searchInput || advancedSearchFilters) && (
+                  <button
+                    onClick={() => {
+                      setSearchInput("");
+                      setAdvancedSearchFilters(null);
+                      setFilters({});
+                      fetchEmails();
+                    }}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+              {/* Advanced Search Button */}
+              <button
+                onClick={() => setShowAdvancedSearch(true)}
+                className={`p-2 rounded-lg transition-colors ${
+                  advancedSearchFilters
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground hover:bg-accent"
+                }`}
+                title="Advanced search"
+              >
+                <SlidersHorizontal className="w-5 h-5" />
+              </button>
             </div>
           </div>
 
@@ -418,22 +803,11 @@ export default function FeedPage() {
           )} */}
 
           <div className="flex items-center gap-3">
-            {/* Sync Button - Icon Only */}
-            <button
-              onClick={handleSync}
-              disabled={isSyncing}
-              className="p-2.5 text-foreground hover:bg-accent rounded-full transition-colors disabled:opacity-50"
-              title="Sync emails"
-            >
-              <svg className={`w-5 h-5 ${isSyncing ? "animate-spin" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                />
-              </svg>
-            </button>
+            {/* Sync Status Indicator */}
+            <SyncStatusIndicator />
+
+            {/* Unsubscribe Recommendations Notification */}
+            <UnsubscribeNotification />
 
             {/* Settings Button - Icon Only */}
             <button
@@ -474,7 +848,14 @@ export default function FeedPage() {
       {/* Main content */}
       <div className="flex-1 flex overflow-hidden main-content-container">
         {/* Sidebar */}
-        {isSidebarOpen && <EmailSidebar activeFolder={activeFolder} onFolderChange={handleFolderChange} />}
+        {isSidebarOpen && (
+          <EmailSidebar
+            activeFolder={activeFolder}
+            onFolderChange={handleFolderChange}
+            onCompose={() => setShowComposeModal(true)}
+            selectedAccountId={selectedAccountId}
+          />
+        )}
 
         {/* Email list section - single bordered container like Gmail */}
         <div
@@ -486,7 +867,7 @@ export default function FeedPage() {
         >
           {/* Email Filters inside the container */}
           <div className="border-b border-border">
-            <EmailFilters emails={emails} activeBadge={activeBadge} onBadgeChange={handleBadgeChange} totalEmailCount={allEmailsCount || totalEmails} />
+            <EmailFilters emails={emails} activeBadge={activeBadge} onBadgeChange={handleBadgeChange} totalEmailCount={totalEmails} refreshKey={refreshKey} emailAccountId={selectedAccountId} />
           </div>
           {/* Email list */}
           <div className="flex-1 overflow-y-auto overflow-x-hidden">
@@ -500,8 +881,14 @@ export default function FeedPage() {
                 selectedEmailId={selectedEmail?.id || null}
                 onSelectEmail={selectEmail}
                 onToggleStar={toggleStar}
-                onDeleteEmails={deleteEmails}
+                onDeleteEmails={handleSoftDeleteEmails}
+                onArchiveEmail={handleArchiveEmail}
+                onUnarchiveEmail={handleUnarchiveEmail}
+                onSnoozeEmail={handleSnoozeEmail}
+                onUnsnoozeEmail={handleUnsnoozeEmail}
+                onHtmlCardLinkClick={trackHtmlCardLinkClick}
                 viewMode={viewMode}
+                isArchivedView={filters.specialFolder === 'archived'}
               />
             )}
           </div>
@@ -577,10 +964,101 @@ export default function FeedPage() {
               onMarkAsRead={markAsRead}
               onSendEmail={handleSendEmail}
               onLinkClick={trackLinkClick}
+              onSnooze={handleSnoozeEmail}
+              onUnsnooze={handleUnsnoozeEmail}
+              onArchive={handleArchiveEmail}
+              onUnarchive={handleUnarchiveEmail}
             />
           </div>
         )}
       </div>
+
+      {/* Undo Toast for delete/archive/snooze actions */}
+      <UndoToast action={currentAction} onDismiss={dismissToast} />
+
+      {/* Gmail-style Compose Modal - bottom right */}
+      {showComposeModal && selectedAccountId !== null && (
+        <GmailCompose
+          emailAccountId={String(selectedAccountId)}
+          onClose={() => setShowComposeModal(false)}
+          onSend={async (emailData) => {
+            await handleSendEmail({
+              to: emailData.to,
+              cc: emailData.cc,
+              bcc: emailData.bcc,
+              subject: emailData.subject,
+              text: emailData.text,
+              emailAccountId: emailData.emailAccountId,
+            });
+          }}
+        />
+      )}
+
+      {/* Show account selection if no account selected (All Emails view) */}
+      {showComposeModal && selectedAccountId === null && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-md w-full p-6">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+              {emailAccounts.length === 0 ? 'No email accounts' : 'Select an email account'}
+            </h2>
+            {emailAccounts.length === 0 ? (
+              <>
+                <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                  Please add an email account first to compose emails.
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setShowComposeModal(false)}
+                    className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => { setShowComposeModal(false); router.push('/accounts'); }}
+                    className="flex-1 px-4 py-2 text-sm font-medium text-white bg-primary hover:bg-primary/90 rounded-lg transition-colors"
+                  >
+                    Add Account
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                  Choose which account to send from:
+                </p>
+                <div className="space-y-2 mb-4">
+                  {emailAccounts.map((account) => (
+                    <button
+                      key={account.id}
+                      onClick={() => setSelectedAccountId(account.id)}
+                      className="w-full flex items-center gap-3 px-4 py-3 text-left bg-gray-50 dark:bg-gray-700 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors"
+                    >
+                      <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white font-semibold">
+                        {account.email.charAt(0).toUpperCase()}
+                      </div>
+                      <span className="text-sm text-gray-900 dark:text-white">{account.email}</span>
+                    </button>
+                  ))}
+                </div>
+                <button
+                  onClick={() => setShowComposeModal(false)}
+                  className="w-full px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Advanced Search Modal */}
+      <AdvancedSearchModal
+        isOpen={showAdvancedSearch}
+        onClose={() => setShowAdvancedSearch(false)}
+        onSearch={handleAdvancedSearch}
+        initialQuery={searchInput}
+      />
     </div>
   );
 }

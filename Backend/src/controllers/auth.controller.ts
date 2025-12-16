@@ -1,12 +1,15 @@
 import { Request, Response, NextFunction } from 'express';
 import bcrypt from 'bcrypt';
 import jwt, { SignOptions } from 'jsonwebtoken';
+import axios from 'axios';
 import { google } from 'googleapis';
 import { AuthService } from '../services/auth.service';
 import { SessionService } from '../services/session.service';
+import { emailVerificationService } from '../services/email-verification.service';
 import { logger } from '../config/logger';
 import { pool } from '../config/database';
 import { GmailPushService } from '../services/gmail-push.service';
+import { OutlookPushService } from '../services/outlook-push.service';
 
 export class AuthController {
   private authService: AuthService;
@@ -44,6 +47,16 @@ export class AuthController {
         displayName: displayName || null
       });
 
+      // Generate and save verification token
+      const verificationToken = emailVerificationService.generateToken();
+      const tokenExpiry = emailVerificationService.generateTokenExpiry();
+      await emailVerificationService.saveVerificationToken(user.id, verificationToken, tokenExpiry);
+
+      // Send verification email (don't block signup if it fails)
+      emailVerificationService.sendVerificationEmail(email, verificationToken, displayName).catch(err => {
+        logger.error('Failed to send verification email:', err);
+      });
+
       // Generate tokens
       const accessToken = this.generateAccessToken(user.id);
       const refreshToken = this.generateRefreshToken(user.id, rememberMe);
@@ -62,7 +75,8 @@ export class AuthController {
         access_token: accessToken,
         refresh_token: refreshToken,
         session_id: session.id,
-        user: this.sanitizeUser(user)
+        user: this.sanitizeUser(user),
+        email_verification_sent: true
       });
     } catch (error) {
       logger.error('Sign up error:', error);
@@ -131,6 +145,7 @@ export class AuthController {
           email: user.email,
           name: user.displayName || '',
           email_provider: user.emailProvider?.toLowerCase() || 'gmail',
+          email_verified: user.emailVerified || false,
           preferences: {
             theme: 'system',
             notifications_enabled: true,
@@ -320,6 +335,7 @@ export class AuthController {
       'https://www.googleapis.com/auth/gmail.modify',
       'https://www.googleapis.com/auth/gmail.send',
       'https://www.googleapis.com/auth/userinfo.email',
+      'https://www.googleapis.com/auth/contacts.readonly', // For contacts autocomplete
       'https://www.googleapis.com/auth/contacts.other.readonly' // For sender profile photos
     ];
 
@@ -454,9 +470,29 @@ export class AuthController {
    * Initiate Outlook OAuth flow
    */
   initiateOutlookOAuth = async (req: Request, res: Response): Promise<void> => {
-    // TODO: Implement Outlook OAuth flow
-    const authUrl = `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=${process.env.OUTLOOK_CLIENT_ID}&redirect_uri=${process.env.OUTLOOK_REDIRECT_URI}&response_type=code&scope=https://outlook.office.com/Mail.Read`;
-    res.redirect(authUrl);
+    const userId = req.query.userId as string;
+
+    if (!userId) {
+      res.status(400).json({ error: 'User ID is required' });
+      return;
+    }
+
+    const scopes = [
+      'https://graph.microsoft.com/Mail.ReadWrite',
+      'https://graph.microsoft.com/Mail.Send',
+      'https://graph.microsoft.com/User.Read',
+      'offline_access' // Required for refresh token
+    ];
+
+    const authUrl = new URL('https://login.microsoftonline.com/common/oauth2/v2.0/authorize');
+    authUrl.searchParams.set('client_id', process.env.OUTLOOK_CLIENT_ID!);
+    authUrl.searchParams.set('redirect_uri', process.env.OUTLOOK_REDIRECT_URI!);
+    authUrl.searchParams.set('response_type', 'code');
+    authUrl.searchParams.set('scope', scopes.join(' '));
+    authUrl.searchParams.set('state', userId); // Pass userId in state
+    authUrl.searchParams.set('response_mode', 'query');
+
+    res.redirect(authUrl.toString());
   };
 
   /**
@@ -464,13 +500,207 @@ export class AuthController {
    */
   handleOutlookCallback = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { code } = req.query;
-      // TODO: Exchange code for tokens and save to user account
-      logger.info('Outlook OAuth callback received');
-      res.json({ message: 'Outlook connected successfully' });
+      const { code, state: userId, error, error_description } = req.query;
+
+      if (error) {
+        logger.error(`Outlook OAuth error: ${error} - ${error_description}`);
+        res.redirect(`http://localhost:3001/settings?outlook=error&message=${encodeURIComponent(error_description as string || error as string)}`);
+        return;
+      }
+
+      if (!code || !userId) {
+        res.status(400).json({ error: 'Missing authorization code or user ID' });
+        return;
+      }
+
+      logger.info(`Outlook OAuth callback received for user: ${userId}`);
+
+      // Exchange code for tokens
+      const tokenResponse = await axios.post(
+        'https://login.microsoftonline.com/common/oauth2/v2.0/token',
+        new URLSearchParams({
+          client_id: process.env.OUTLOOK_CLIENT_ID!,
+          client_secret: process.env.OUTLOOK_CLIENT_SECRET!,
+          code: code as string,
+          redirect_uri: process.env.OUTLOOK_REDIRECT_URI!,
+          grant_type: 'authorization_code',
+          scope: 'https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Mail.Send https://graph.microsoft.com/User.Read offline_access'
+        }),
+        { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+      );
+
+      const { access_token, refresh_token, expires_in } = tokenResponse.data;
+
+      logger.info('Successfully exchanged Outlook code for tokens');
+
+      // Get user's email from Microsoft Graph API
+      const userResponse = await axios.get('https://graph.microsoft.com/v1.0/me', {
+        headers: { Authorization: `Bearer ${access_token}` }
+      });
+
+      // Microsoft returns email in 'mail' or 'userPrincipalName'
+      const outlookEmail = userResponse.data.mail || userResponse.data.userPrincipalName;
+      const displayName = userResponse.data.displayName;
+
+      logger.info(`Outlook connected: ${outlookEmail}`);
+
+      // Check if this email account already exists for this user
+      const existingAccount = await pool.query(
+        'SELECT id FROM email_accounts WHERE user_id = $1 AND email_address = $2',
+        [userId, outlookEmail]
+      );
+
+      const tokenExpiresAt = new Date(Date.now() + expires_in * 1000);
+
+      if (existingAccount.rows.length > 0) {
+        // Update existing account with new tokens
+        await pool.query(
+          `UPDATE email_accounts
+           SET access_token = $1, refresh_token = $2, token_expires_at = $3,
+               last_sync_error = NULL, updated_at = NOW()
+           WHERE user_id = $4 AND email_address = $5`,
+          [access_token, refresh_token, tokenExpiresAt, userId, outlookEmail]
+        );
+        logger.info(`Updated Outlook tokens for ${outlookEmail}`);
+      } else {
+        // Create new email account with OAuth tokens
+        await pool.query(
+          `INSERT INTO email_accounts (
+            user_id, email_address, account_name, provider,
+            imap_host, imap_port, imap_secure, encrypted_password,
+            access_token, refresh_token, token_expires_at,
+            is_active, sync_enabled
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+          [
+            userId,
+            outlookEmail,
+            displayName ? `Outlook - ${displayName}` : `Outlook - ${outlookEmail}`,
+            'outlook',
+            'outlook.office365.com', // Not used for OAuth but required field
+            993,
+            true,
+            'oauth', // Placeholder for password field
+            access_token,
+            refresh_token,
+            tokenExpiresAt,
+            true,
+            true
+          ]
+        );
+        logger.info(`Created new Outlook account for ${outlookEmail}`);
+      }
+
+      // Get the account ID for this email
+      const accountIdQuery = await pool.query(
+        'SELECT id FROM email_accounts WHERE user_id = $1 AND email_address = $2',
+        [userId, outlookEmail]
+      );
+
+      if (accountIdQuery.rows.length > 0 && access_token && refresh_token) {
+        const emailAccountId = accountIdQuery.rows[0].id;
+
+        // Set up Outlook push notifications (Microsoft Graph subscription)
+        const webhookBaseUrl = process.env.OUTLOOK_WEBHOOK_BASE_URL ||
+          `https://${process.env.NGROK_DOMAIN}`;
+        const webhookUrl = `${webhookBaseUrl}/api/outlook/webhook`;
+
+        OutlookPushService.createSubscription(
+          {
+            accessToken: access_token,
+            refreshToken: refresh_token,
+            clientId: process.env.OUTLOOK_CLIENT_ID || '',
+            clientSecret: process.env.OUTLOOK_CLIENT_SECRET || ''
+          },
+          emailAccountId,
+          webhookUrl
+        ).then(() => {
+          logger.info(`Outlook push subscription created for ${outlookEmail}`);
+        }).catch((error) => {
+          logger.error(`Failed to create Outlook push subscription for ${outlookEmail}:`, error.response?.data || error.message);
+        });
+      }
+
+      // Redirect to frontend success page
+      res.redirect(`http://localhost:3001/settings?outlook=connected&email=${encodeURIComponent(outlookEmail as string)}`);
+    } catch (error: any) {
+      logger.error('Outlook OAuth error:', error.response?.data || error.message);
+      res.redirect(`http://localhost:3001/settings?outlook=error&message=${encodeURIComponent(error.response?.data?.error_description || error.message)}`);
+    }
+  };
+
+  /**
+   * Verify email with token
+   * GET /api/auth/verify-email?token=xxx
+   */
+  verifyEmail = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { token } = req.query;
+
+      if (!token || typeof token !== 'string') {
+        res.status(400).json({ error: 'Verification token is required' });
+        return;
+      }
+
+      const result = await emailVerificationService.verifyEmail(token);
+
+      if (result.success) {
+        // Redirect to frontend success page
+        res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3001'}/verify-email?status=success`);
+      } else {
+        // Redirect to frontend error page
+        res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3001'}/verify-email?status=error&message=${encodeURIComponent(result.message)}`);
+      }
     } catch (error) {
-      logger.error('Outlook OAuth error:', error);
-      next(error);
+      logger.error('Verify email error:', error);
+      res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3001'}/verify-email?status=error&message=${encodeURIComponent('An error occurred')}`);
+    }
+  };
+
+  /**
+   * Resend verification email
+   * POST /api/auth/resend-verification
+   */
+  resendVerification = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = (req as any).userId;
+
+      if (!userId) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+
+      const result = await emailVerificationService.resendVerificationEmail(userId);
+
+      if (result.success) {
+        res.json({ message: result.message });
+      } else {
+        res.status(400).json({ error: result.message });
+      }
+    } catch (error) {
+      logger.error('Resend verification error:', error);
+      res.status(500).json({ error: 'Failed to resend verification email' });
+    }
+  };
+
+  /**
+   * Check verification status
+   * GET /api/auth/verification-status
+   */
+  getVerificationStatus = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = (req as any).userId;
+
+      if (!userId) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+
+      const isVerified = await emailVerificationService.isEmailVerified(userId);
+
+      res.json({ email_verified: isVerified });
+    } catch (error) {
+      logger.error('Get verification status error:', error);
+      res.status(500).json({ error: 'Failed to get verification status' });
     }
   };
 

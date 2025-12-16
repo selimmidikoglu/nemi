@@ -45,7 +45,8 @@ function RegisterForm() {
 
     try {
       await register(email, password, name || undefined)
-      router.push('/feed')
+      // Redirect to verify-email page after successful registration
+      router.push('/verify-email')
     } catch (err: any) {
       setError(err.response?.data?.message || 'Registration failed. Please try again.')
     } finally {
@@ -67,7 +68,7 @@ function RegisterForm() {
           <Link href="/" className="flex items-center gap-3 mb-12 group">
             <div className="relative w-12 h-12 transition-transform group-hover:scale-110">
               <Image
-                src="/main-logo.png"
+                src="/Nemi-logo.png"
                 alt="NEMI"
                 fill
                 className="object-contain"
@@ -129,7 +130,7 @@ function RegisterForm() {
             <Link href="/" className="flex items-center gap-2">
               <div className="relative w-10 h-10">
                 <Image
-                  src="/main-logo.png"
+                  src="/Nemi-logo.png"
                   alt="NEMI"
                   fill
                   className="object-contain"
