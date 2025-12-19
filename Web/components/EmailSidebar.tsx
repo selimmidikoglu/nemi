@@ -269,6 +269,30 @@ export default function EmailSidebar({ activeFolder, onFolderChange, onCompose, 
     );
   }
 
+  // Show simplified view when no accounts are connected
+  if (emailAccounts.length === 0) {
+    return (
+      <div className="w-60 border-r border-border bg-card flex flex-col">
+        <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">
+          <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mb-4">
+            <Mail className="w-8 h-8 text-primary" />
+          </div>
+          <h3 className="text-lg font-semibold text-foreground mb-2">Welcome to NEMI</h3>
+          <p className="text-sm text-muted-foreground mb-6">
+            Connect your email account to get started
+          </p>
+          <button
+            onClick={handleAddAccount}
+            className="flex items-center gap-2 px-6 py-3 text-sm font-semibold text-white bg-primary hover:bg-primary/90 rounded-xl shadow-md hover:shadow-lg transition-all"
+          >
+            <Plus className="size-5" />
+            Add Email Account
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="w-60 border-r border-border bg-card flex flex-col">
       {/* Header with Compose Button */}
@@ -383,12 +407,7 @@ export default function EmailSidebar({ activeFolder, onFolderChange, onCompose, 
         )}
 
         {/* Individual Email Accounts */}
-        {emailAccounts.length === 0 ? (
-          <div className="p-4 text-center text-sm text-muted-foreground">
-            No email accounts added yet
-          </div>
-        ) : (
-          emailAccounts.map((account) => (
+        {emailAccounts.map((account) => (
             <div key={account.id} className="mb-1">
               {/* Account Header */}
               <button
@@ -477,8 +496,7 @@ export default function EmailSidebar({ activeFolder, onFolderChange, onCompose, 
                 </div>
               )}
             </div>
-          ))
-        )}
+          ))}
       </div>
     </div>
   );

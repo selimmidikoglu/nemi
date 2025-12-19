@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { X, Minus, Maximize2, Minimize2, Send, Loader2, Paperclip, Smile, Bold, Italic, Underline, Link as LinkIcon, Image as ImageIcon, Trash2 } from 'lucide-react'
+import { X, Minus, Maximize2, Minimize2, Send, Loader2, Paperclip, Smile, Bold, Italic, Underline, Link as LinkIcon, Image as ImageIcon, Trash2, Clock, ChevronDown } from 'lucide-react'
 import data from '@emoji-mart/data'
 import Picker from '@emoji-mart/react'
 import type { EmailAddress } from '@/types'
@@ -58,6 +58,8 @@ interface GmailComposeProps {
   initialTo?: string
   initialSubject?: string
   isReply?: boolean
+  // Undo send callback - if provided, returns scheduled email info
+  onScheduledSend?: (scheduledEmailId: string, subject: string, to: string) => void
 }
 
 export default function GmailCompose({
@@ -66,7 +68,8 @@ export default function GmailCompose({
   onClose,
   initialTo = '',
   initialSubject = '',
-  isReply = false
+  isReply = false,
+  onScheduledSend
 }: GmailComposeProps) {
   // Parse initial recipients
   const parseInitialRecipients = (str: string): Recipient[] => {
@@ -106,6 +109,13 @@ export default function GmailCompose({
   const [linkUrl, setLinkUrl] = useState('')
   const [linkText, setLinkText] = useState('')
 
+  // Schedule send states
+  const [showScheduleMenu, setShowScheduleMenu] = useState(false)
+  const [showCustomSchedule, setShowCustomSchedule] = useState(false)
+  const [scheduledDate, setScheduledDate] = useState('')
+  const [scheduledTime, setScheduledTime] = useState('')
+  const scheduleMenuRef = useRef<HTMLDivElement>(null)
+
   // Formatting state
   const [isBold, setIsBold] = useState(false)
   const [isItalic, setIsItalic] = useState(false)
@@ -133,6 +143,10 @@ export default function GmailCompose({
       }
       if (contactSuggestionsRef.current && !contactSuggestionsRef.current.contains(event.target as Node)) {
         setShowContactSuggestions(false)
+      }
+      if (scheduleMenuRef.current && !scheduleMenuRef.current.contains(event.target as Node)) {
+        setShowScheduleMenu(false)
+        setShowCustomSchedule(false)
       }
     }
     document.addEventListener('mousedown', handleClickOutside)
@@ -398,7 +412,103 @@ export default function GmailCompose({
     }
   }
 
-  // Handle send
+  // Helper function to get schedule time options
+  const getScheduleOptions = () => {
+    const now = new Date()
+    const options = []
+
+    // Tomorrow morning 8 AM
+    const tomorrowMorning = new Date(now)
+    tomorrowMorning.setDate(tomorrowMorning.getDate() + 1)
+    tomorrowMorning.setHours(8, 0, 0, 0)
+    options.push({
+      label: 'Tomorrow morning',
+      sublabel: tomorrowMorning.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) + ' at 8:00 AM',
+      date: tomorrowMorning
+    })
+
+    // Tomorrow afternoon 1 PM
+    const tomorrowAfternoon = new Date(now)
+    tomorrowAfternoon.setDate(tomorrowAfternoon.getDate() + 1)
+    tomorrowAfternoon.setHours(13, 0, 0, 0)
+    options.push({
+      label: 'Tomorrow afternoon',
+      sublabel: tomorrowAfternoon.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) + ' at 1:00 PM',
+      date: tomorrowAfternoon
+    })
+
+    // Monday morning 8 AM (if today is Fri/Sat/Sun)
+    const dayOfWeek = now.getDay()
+    if (dayOfWeek >= 5 || dayOfWeek === 0) { // Fri, Sat, Sun
+      const monday = new Date(now)
+      const daysUntilMonday = dayOfWeek === 0 ? 1 : 8 - dayOfWeek
+      monday.setDate(monday.getDate() + daysUntilMonday)
+      monday.setHours(8, 0, 0, 0)
+      options.push({
+        label: 'Monday morning',
+        sublabel: monday.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) + ' at 8:00 AM',
+        date: monday
+      })
+    }
+
+    return options
+  }
+
+  // Handle scheduled send
+  const handleScheduledSend = async (sendAt: Date) => {
+    const toAddresses: EmailAddress[] = toRecipients.map(r => ({ email: r.email, name: r.name }))
+
+    if (toAddresses.length === 0) {
+      alert('Please enter at least one recipient')
+      return
+    }
+
+    setIsSending(true)
+    setShowScheduleMenu(false)
+    setShowCustomSchedule(false)
+
+    try {
+      const ccAddresses: EmailAddress[] = ccRecipients.map(r => ({ email: r.email, name: r.name }))
+      const bccAddresses: EmailAddress[] = bccRecipients.map(r => ({ email: r.email, name: r.name }))
+
+      const { apiService } = await import('@/lib/api')
+      await apiService.scheduleEmail({
+        to: toAddresses,
+        cc: showCc && ccAddresses.length > 0 ? ccAddresses : undefined,
+        bcc: showBcc && bccAddresses.length > 0 ? bccAddresses : undefined,
+        subject: subject.trim(),
+        text: body,
+        emailAccountId
+      }, 0, sendAt) // No undo delay for scheduled sends
+
+      // Show success message
+      alert(`Email scheduled for ${sendAt.toLocaleString()}`)
+      onClose()
+    } catch (error) {
+      console.error('Failed to schedule email:', error)
+      alert('Failed to schedule email. Please try again.')
+    } finally {
+      setIsSending(false)
+    }
+  }
+
+  // Handle custom schedule
+  const handleCustomSchedule = () => {
+    if (!scheduledDate || !scheduledTime) {
+      alert('Please select both date and time')
+      return
+    }
+
+    const sendAt = new Date(`${scheduledDate}T${scheduledTime}`)
+    if (sendAt <= new Date()) {
+      alert('Please select a future date and time')
+      return
+    }
+
+    handleScheduledSend(sendAt)
+  }
+
+  // Handle send - uses scheduled send with undo capability if onScheduledSend is provided
   const handleSend = async () => {
     // Convert recipients to EmailAddress format
     const toAddresses: EmailAddress[] = toRecipients.map(r => ({ email: r.email, name: r.name }))
@@ -432,8 +542,28 @@ export default function GmailCompose({
         emailAccountId
       }
 
-      await onSend(emailData)
-      onClose()
+      // If onScheduledSend is provided, use scheduled send with undo capability
+      if (onScheduledSend) {
+        const { apiService } = await import('@/lib/api')
+        const result = await apiService.scheduleEmail({
+          to: toAddresses,
+          cc: showCc && ccAddresses.length > 0 ? ccAddresses : undefined,
+          bcc: showBcc && bccAddresses.length > 0 ? bccAddresses : undefined,
+          subject: subject.trim(),
+          text: body,
+          emailAccountId
+        }, 10) // 10 second undo delay
+
+        // Notify parent of scheduled send
+        const firstRecipient = toAddresses[0]
+        const toDisplay = firstRecipient.name || firstRecipient.email
+        onScheduledSend(result.scheduledEmailId, subject.trim(), toDisplay)
+        onClose()
+      } else {
+        // Direct send without undo
+        await onSend(emailData)
+        onClose()
+      }
     } catch (error) {
       console.error('Failed to send email:', error)
       alert('Failed to send email. Please try again.')
@@ -769,23 +899,127 @@ export default function GmailCompose({
             <div className="flex items-center justify-between px-3 py-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50/80 dark:bg-[#2a2a2a]">
               {/* Send button */}
               <div className="flex items-center gap-2">
-                <button
-                  onClick={handleSend}
-                  disabled={isSending}
-                  className="px-6 py-2 text-[13px] font-semibold text-white bg-gradient-to-r from-[#1a73e8] to-[#4285f4] hover:from-[#1557b0] hover:to-[#3367d6] rounded-full flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-md hover:shadow-lg transition-all"
-                >
-                  {isSending ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      Sending...
-                    </>
-                  ) : (
-                    <>
-                      <Send className="w-4 h-4" />
-                      Send
-                    </>
+                <div className="relative flex items-center">
+                  {/* Send button */}
+                  <button
+                    onClick={handleSend}
+                    disabled={isSending}
+                    className="px-5 py-2 text-[13px] font-semibold text-white bg-gradient-to-r from-[#1a73e8] to-[#4285f4] hover:from-[#1557b0] hover:to-[#3367d6] rounded-l-full flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-md hover:shadow-lg transition-all"
+                  >
+                    {isSending ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Sending...
+                      </>
+                    ) : (
+                      <>
+                        <Send className="w-4 h-4" />
+                        Send
+                      </>
+                    )}
+                  </button>
+
+                  {/* Schedule send dropdown trigger */}
+                  <button
+                    onClick={() => setShowScheduleMenu(!showScheduleMenu)}
+                    disabled={isSending}
+                    className="px-2 py-2 text-white bg-[#1557b0] hover:bg-[#0d47a1] rounded-r-full border-l border-white/20 disabled:opacity-50 disabled:cursor-not-allowed shadow-md hover:shadow-lg transition-all"
+                    title="Schedule send"
+                  >
+                    <ChevronDown className="w-4 h-4" />
+                  </button>
+
+                  {/* Schedule send menu */}
+                  {showScheduleMenu && (
+                    <div
+                      ref={scheduleMenuRef}
+                      className="absolute bottom-full left-0 mb-2 w-72 bg-white dark:bg-[#2d2d2d] rounded-xl shadow-2xl border border-gray-200 dark:border-gray-600 overflow-hidden z-50"
+                    >
+                      <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700">
+                        <h3 className="text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+                          <Clock className="w-4 h-4" />
+                          Schedule send
+                        </h3>
+                      </div>
+
+                      {!showCustomSchedule ? (
+                        <>
+                          {/* Quick options */}
+                          <div className="py-1">
+                            {getScheduleOptions().map((option, index) => (
+                              <button
+                                key={index}
+                                onClick={() => handleScheduledSend(option.date)}
+                                className="w-full px-4 py-2.5 text-left hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors"
+                              >
+                                <div className="text-[13px] font-medium text-gray-900 dark:text-white">
+                                  {option.label}
+                                </div>
+                                <div className="text-[11px] text-gray-500 dark:text-gray-400">
+                                  {option.sublabel}
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+
+                          <div className="border-t border-gray-200 dark:border-gray-700 py-1">
+                            <button
+                              onClick={() => setShowCustomSchedule(true)}
+                              className="w-full px-4 py-2.5 text-left hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors flex items-center gap-2"
+                            >
+                              <Clock className="w-4 h-4 text-blue-600" />
+                              <span className="text-[13px] font-medium text-blue-600">
+                                Pick date & time
+                              </span>
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        /* Custom date/time picker */
+                        <div className="p-4 space-y-3">
+                          <div>
+                            <label className="text-[11px] text-gray-500 dark:text-gray-400 mb-1 block uppercase tracking-wide font-medium">
+                              Date
+                            </label>
+                            <input
+                              type="date"
+                              value={scheduledDate}
+                              onChange={(e) => setScheduledDate(e.target.value)}
+                              min={new Date().toISOString().split('T')[0]}
+                              className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[11px] text-gray-500 dark:text-gray-400 mb-1 block uppercase tracking-wide font-medium">
+                              Time
+                            </label>
+                            <input
+                              type="time"
+                              value={scheduledTime}
+                              onChange={(e) => setScheduledTime(e.target.value)}
+                              className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            />
+                          </div>
+                          <div className="flex gap-2 pt-2">
+                            <button
+                              onClick={() => setShowCustomSchedule(false)}
+                              className="flex-1 px-3 py-2 text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg font-medium"
+                            >
+                              Back
+                            </button>
+                            <button
+                              onClick={handleCustomSchedule}
+                              disabled={!scheduledDate || !scheduledTime}
+                              className="flex-1 px-3 py-2 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              Schedule
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   )}
-                </button>
+                </div>
 
                 {/* Formatting */}
                 <div className="flex items-center ml-1 pl-2 border-l border-gray-300 dark:border-gray-600">

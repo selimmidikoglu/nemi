@@ -303,7 +303,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   totalPages: 1,
   totalEmails: 0,
   allEmailsCount: 0,
-  viewMode: (typeof window !== 'undefined' && localStorage.getItem('emailViewMode') as ViewMode) || 'compact',
+  viewMode: (typeof window !== 'undefined' && localStorage.getItem('emailViewMode') as ViewMode) || 'minimal',
   searchQuery: '',
   refreshKey: 0,
   searchBadgeStats: null,
@@ -313,8 +313,9 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     set({ isLoading: true, error: null })
     try {
       const { page, filters, searchQuery, allEmailsCount } = get()
-      const limit = 20
+      const limit = 50
       const offset = (page - 1) * limit
+      console.log('🔍 fetchEmails called with filters:', filters, 'searchQuery:', searchQuery)
 
       // Handle special folders with separate endpoints or filters
       if (filters.specialFolder === 'starred') {

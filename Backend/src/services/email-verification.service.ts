@@ -276,12 +276,20 @@ If you didn't create an account with NEMI, you can safely ignore this email.
           <!-- Header with Logo -->
           <tr>
             <td align="center" style="padding: 40px 40px 30px 40px;">
-              <div style="display: inline-flex; align-items: center; gap: 12px;">
-                <div style="width: 48px; height: 48px; background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); border-radius: 12px; display: flex; align-items: center; justify-content: center;">
-                  <span style="color: white; font-size: 24px; font-weight: bold;">N</span>
-                </div>
-                <span style="font-size: 32px; font-weight: 700; color: #ffffff; letter-spacing: -0.5px;">NEMI</span>
-              </div>
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin: 0 auto;">
+                <tr>
+                  <td style="vertical-align: middle; padding-right: 12px;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width: 48px; height: 48px; border-radius: 12px; background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);">
+                      <tr>
+                        <td align="center" valign="middle" style="width: 48px; height: 48px; color: white; font-size: 24px; font-weight: bold; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">N</td>
+                      </tr>
+                    </table>
+                  </td>
+                  <td style="vertical-align: middle;">
+                    <span style="font-size: 32px; font-weight: 700; color: #ffffff; letter-spacing: -0.5px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">NEMI</span>
+                  </td>
+                </tr>
+              </table>
             </td>
           </tr>
 

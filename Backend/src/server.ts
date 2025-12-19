@@ -18,6 +18,7 @@ import { EngagementCalculationJob } from './jobs/engagement-calculation.job';
 import { UnsubscribeRecommendationsJob } from './jobs/unsubscribe-recommendations.job';
 import { GmailPushService } from './services/gmail-push.service';
 import { OutlookPushService } from './services/outlook-push.service';
+import { startScheduledEmailProcessor, stopScheduledEmailProcessor } from './jobs/scheduled-email.job';
 
 // Store the ngrok URL globally so it can be accessed by other services
 export let ngrokUrl: string | null = null;
@@ -96,6 +97,9 @@ const startServer = async () => {
     // Start unsubscribe recommendations job
     const unsubscribeJob = new UnsubscribeRecommendationsJob();
     unsubscribeJob.start();
+
+    // Start scheduled email processor (for undo send feature)
+    startScheduledEmailProcessor();
 
     // Create HTTP server
     const server = http.createServer(app);
@@ -178,6 +182,7 @@ const startServer = async () => {
 // Handle graceful shutdown
 process.on('SIGTERM', async () => {
   logger.info('SIGTERM signal received: closing HTTP server');
+  stopScheduledEmailProcessor();
   if (ngrokUrl) {
     await ngrok.disconnect();
     logger.info('Ngrok tunnel disconnected');
@@ -187,6 +192,7 @@ process.on('SIGTERM', async () => {
 
 process.on('SIGINT', async () => {
   logger.info('SIGINT signal received: closing HTTP server');
+  stopScheduledEmailProcessor();
   if (ngrokUrl) {
     await ngrok.disconnect();
     logger.info('Ngrok tunnel disconnected');

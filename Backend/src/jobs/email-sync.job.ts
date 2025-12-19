@@ -544,6 +544,31 @@ export class EmailSyncJob {
           );
         }
 
+        // Save extracted actions to email_actions table
+        if (aiAnalysis.extractedActions && aiAnalysis.extractedActions.length > 0) {
+          for (const action of aiAnalysis.extractedActions) {
+            await pool.query(
+              `INSERT INTO email_actions (
+                email_id, user_id, action_type, title, due_date, priority,
+                source_text, calendar_type, status
+              )
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending')
+              ON CONFLICT DO NOTHING`,
+              [
+                emailId,
+                userId,
+                action.type,
+                action.title,
+                action.date || null,
+                action.priority || 'medium',
+                action.source_text || null,
+                action.calendar_type || 'reminder'
+              ]
+            );
+          }
+          logger.info(`📅 Saved ${aiAnalysis.extractedActions.length} action(s) for email "${email.subject.substring(0, 30)}..."`);
+        }
+
         // Index to Elasticsearch (non-blocking)
         this.indexEmailToElasticsearch(emailId, userId, emailAccountId, email, aiAnalysis).catch((err: Error) => {
           logger.warn(`Failed to index email to Elasticsearch: ${err.message}`);

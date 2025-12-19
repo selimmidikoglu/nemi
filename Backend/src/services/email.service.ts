@@ -91,10 +91,10 @@ export class EmailService {
             snippet, date, is_read, is_starred, has_attachments,
             ai_summary, category, importance, is_personally_relevant,
             company_name, company_domain, company_logo_url,
-            is_answerable, suggested_replies,
+            is_answerable, response_urgency, suggested_replies, extracted_actions,
             unsubscribe_url, unsubscribe_email
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
           ON CONFLICT (user_id, provider_email_id) DO UPDATE SET
             ai_summary = EXCLUDED.ai_summary,
             category = EXCLUDED.category,
@@ -104,7 +104,9 @@ export class EmailService {
             company_domain = EXCLUDED.company_domain,
             company_logo_url = EXCLUDED.company_logo_url,
             is_answerable = EXCLUDED.is_answerable,
+            response_urgency = EXCLUDED.response_urgency,
             suggested_replies = EXCLUDED.suggested_replies,
+            extracted_actions = EXCLUDED.extracted_actions,
             unsubscribe_url = COALESCE(EXCLUDED.unsubscribe_url, emails.unsubscribe_url),
             unsubscribe_email = COALESCE(EXCLUDED.unsubscribe_email, emails.unsubscribe_email)
           RETURNING id`,
@@ -132,12 +134,16 @@ export class EmailService {
             email.companyName,
             email.companyDomain,
             email.companyLogoUrl,
-            email.isAnswerable,
-            email.suggestedReplies ? JSON.stringify(email.suggestedReplies) : null,
+            email.isAnswerable ?? false,
+            email.responseUrgency || 'none',
+            email.suggestedReplies ? JSON.stringify(email.suggestedReplies) : '[]',
+            email.extractedActions ? JSON.stringify(email.extractedActions) : '[]',
             email.unsubscribeUrl || null,
             email.unsubscribeEmail || null
           ]
         );
+
+        const emailId = result.rows[0].id;
 
         // Save attachments if any
         if (email.attachments && email.attachments.length > 0) {
@@ -145,12 +151,36 @@ export class EmailService {
             await client.query(
               `INSERT INTO email_attachments (email_id, filename, mime_type, size, download_url)
                VALUES ($1, $2, $3, $4, $5)`,
-              [result.rows[0].id, attachment.filename, attachment.mimeType, attachment.size, attachment.downloadUrl]
+              [emailId, attachment.filename, attachment.mimeType, attachment.size, attachment.downloadUrl]
             );
           }
         }
 
-        savedEmails.push({ ...email, id: result.rows[0].id });
+        // Save extracted actions to email_actions table
+        if (email.extractedActions && email.extractedActions.length > 0) {
+          for (const action of email.extractedActions) {
+            await client.query(
+              `INSERT INTO email_actions (
+                email_id, user_id, action_type, title, due_date, priority,
+                source_text, calendar_type, status
+              )
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending')
+              ON CONFLICT DO NOTHING`,
+              [
+                emailId,
+                userId,
+                action.type,
+                action.title,
+                action.date || null,
+                action.priority || 'medium',
+                action.source_text || null,
+                action.calendar_type || 'reminder'
+              ]
+            );
+          }
+        }
+
+        savedEmails.push({ ...email, id: emailId });
       }
 
       await client.query('COMMIT');
@@ -331,7 +361,7 @@ export class EmailService {
         e.master_importance_score, e.created_at, e.email_account_id, e.message_id, e.thread_id,
         e.company_name, e.company_domain, e.company_logo_url,
         e.is_about_me, e.mention_context, e.html_snippet, e.render_as_html,
-        e.is_answerable, e.suggested_replies,
+        e.is_answerable, e.response_urgency, e.suggested_replies, e.extracted_actions,
         eps.personalized_score,
         COALESCE(
           json_agg(
@@ -749,7 +779,9 @@ export class EmailService {
       renderAsHtml: row.render_as_html || false,
       // NEW: AI-powered reply assistance
       isAnswerable: row.is_answerable || false,
-      suggestedReplies: parseJsonField(row.suggested_replies, null),
+      responseUrgency: row.response_urgency || 'none',
+      suggestedReplies: parseJsonField(row.suggested_replies, []),
+      extractedActions: parseJsonField(row.extracted_actions, []),
       // Snooze and Archive features
       snoozedUntil: row.snoozed_until || null,
       isArchived: row.is_archived || false

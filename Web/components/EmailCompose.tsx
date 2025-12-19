@@ -9,6 +9,8 @@ interface EmailComposeProps {
   onClose: () => void
   onSend: (emailData: SendEmailData) => Promise<void>
   replyTo?: Email
+  forwardEmail?: Email  // For forwarding emails
+  isReplyAll?: boolean  // Include CC recipients in To field
   emailAccountId: string
 }
 
@@ -27,6 +29,8 @@ export default function EmailCompose({
   onClose,
   onSend,
   replyTo,
+  forwardEmail,
+  isReplyAll,
   emailAccountId
 }: EmailComposeProps) {
   const [to, setTo] = useState('')
@@ -37,7 +41,7 @@ export default function EmailCompose({
   const [showCc, setShowCc] = useState(false)
   const [showBcc, setShowBcc] = useState(false)
   const [isSending, setIsSending] = useState(false)
-  const [selectedReply, setSelectedReply] = useState<'quick' | 'standard' | 'detailed' | null>(null)
+  const [selectedReplyIndex, setSelectedReplyIndex] = useState<number | null>(null)
   const [aiSuggestion, setAiSuggestion] = useState('')
   const [isLoadingSuggestion, setIsLoadingSuggestion] = useState(false)
   const [showSuggestion, setShowSuggestion] = useState(false)
@@ -72,15 +76,60 @@ export default function EmailCompose({
     return emailString.split(',').map(e => parseEmailAddress(e.trim()))
   }
 
-  // Pre-fill fields if replying
+  // Pre-fill fields based on mode (reply, reply all, forward)
   useEffect(() => {
-    if (replyTo) {
-      // Set To field to reply-to or from
+    if (forwardEmail) {
+      // Forward mode - empty To, subject with "Fwd: " prefix, include original content
+      setTo('')
+      const subjectText = typeof forwardEmail.subject === 'string' ? forwardEmail.subject : ''
+      setSubject(subjectText.startsWith('Fwd: ') ? subjectText : `Fwd: ${subjectText}`)
+
+      // Include forwarded content
+      const originalDate = forwardEmail.date ? new Date(forwardEmail.date).toLocaleString() : ''
+      const forwardedBody = `
+
+---------- Forwarded message ---------
+From: ${forwardEmail.from}
+Date: ${originalDate}
+Subject: ${forwardEmail.subject}
+To: ${forwardEmail.to}
+
+${forwardEmail.textBody || forwardEmail.body || ''}
+`
+      setBody(forwardedBody)
+    } else if (replyTo) {
+      // Reply/Reply All mode
       const replyToAddress = replyTo.replyTo && replyTo.replyTo.length > 0
         ? replyTo.replyTo[0]
         : parseEmailAddress(replyTo.from)
 
-      setTo(replyToAddress.email)
+      if (isReplyAll) {
+        // Reply All: include original recipients (excluding self)
+        const toAddresses: string[] = [replyToAddress.email]
+
+        // Add original To recipients (but not ourselves - we're replying)
+        if (typeof replyTo.to === 'string') {
+          // Filter out any empty strings
+          const toList = replyTo.to.split(',').map(e => e.trim()).filter(e => e)
+          toAddresses.push(...toList)
+        }
+
+        // Remove duplicates
+        const uniqueToAddresses = [...new Set(toAddresses)]
+        setTo(uniqueToAddresses.join(', '))
+
+        // Set CC if original had CC
+        if (replyTo.cc && replyTo.cc.length > 0) {
+          const ccList = replyTo.cc.map(cc =>
+            typeof cc === 'string' ? cc : cc.email
+          )
+          setCc(ccList.join(', '))
+          setShowCc(true)
+        }
+      } else {
+        // Simple Reply: just reply to sender
+        setTo(replyToAddress.email)
+      }
 
       // Set subject with "Re: " prefix
       const subjectText = typeof replyTo.subject === 'string' ? replyTo.subject : ''
@@ -89,12 +138,32 @@ export default function EmailCompose({
       // Don't pre-fill body - let user write from scratch
       setBody('')
     }
-  }, [replyTo])
+  }, [replyTo, forwardEmail, isReplyAll])
 
-  const handleSelectReply = (type: 'quick' | 'standard' | 'detailed') => {
-    if (!replyTo?.suggestedReplies) return
-    setBody(replyTo.suggestedReplies[type])
-    setSelectedReply(type)
+  const handleSelectReply = (index: number) => {
+    if (!replyTo?.suggestedReplies || !replyTo.suggestedReplies[index]) return
+    setBody(replyTo.suggestedReplies[index].text)
+    setSelectedReplyIndex(index)
+  }
+
+  // Get approach display label
+  const getApproachLabel = (approach: string): string => {
+    const labels: Record<string, string> = {
+      'direct_accept': 'Accept',
+      'conditional': 'Conditional',
+      'defer': 'Defer',
+      'defer_alternative': 'Suggest Alternative',
+      'ask_clarification': 'Ask Question',
+      'polite_decline': 'Decline',
+      'suggest_alternative': 'Alternative'
+    }
+    return labels[approach] || approach.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
+  }
+
+  // Get approach color
+  const getApproachColor = (index: number): string => {
+    const colors = ['blue', 'purple', 'amber']
+    return colors[index] || 'gray'
   }
 
   // Search contacts for autocomplete
@@ -383,7 +452,11 @@ export default function EmailCompose({
         {/* Header - Gmail style */}
         <div className="flex items-center justify-between px-4 py-2 bg-gray-100 dark:bg-gray-900 border-b border-gray-300 dark:border-gray-600">
           <h2 className="text-xs font-medium text-gray-900 dark:text-white">
-            {replyTo ? `Re: ${replyTo.subject}` : 'New Message'}
+            {forwardEmail
+              ? `Fwd: ${forwardEmail.subject}`
+              : replyTo
+                ? `${isReplyAll ? 'Reply All: ' : 'Re: '}${replyTo.subject}`
+                : 'New Message'}
           </h2>
           <button
             onClick={onClose}
@@ -397,24 +470,26 @@ export default function EmailCompose({
         {/* Two-column layout: Email Detail on Left, Compose on Right */}
         <div className="flex-1 flex overflow-hidden">
           {/* LEFT SIDE - Original Email (like EmailDetail) */}
-          {replyTo && (
+          {(replyTo || forwardEmail) && (() => {
+            const sourceEmail = replyTo || forwardEmail!
+            return (
             <div className="flex-1 overflow-y-auto bg-gray-50 dark:bg-gray-900/50 border-r-2 border-gray-300 dark:border-gray-600">
               <div className="p-6">
               {/* Email header info */}
               <div className="mb-3 pb-3 border-b border-gray-200 dark:border-gray-700">
                 <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-1.5">
-                  {replyTo.subject}
+                  {sourceEmail.subject}
                 </h3>
                 <div className="text-xs text-gray-600 dark:text-gray-400 space-y-0.5">
-                  <p><span className="font-medium">From:</span> {typeof replyTo.from === 'string' ? replyTo.from : (replyTo.from as any)?.name ? `${(replyTo.from as any).name} <${(replyTo.from as any).email}>` : (replyTo.from as any)?.email}</p>
-                  <p><span className="font-medium">To:</span> {typeof replyTo.to === 'string' ? replyTo.to : (replyTo.to as any)?.name ? `${(replyTo.to as any).name} <${(replyTo.to as any).email}>` : (replyTo.to as any)?.email}</p>
-                  <p><span className="font-medium">Date:</span> {new Date(replyTo.date).toLocaleString()}</p>
+                  <p><span className="font-medium">From:</span> {typeof sourceEmail.from === 'string' ? sourceEmail.from : (sourceEmail.from as any)?.name ? `${(sourceEmail.from as any).name} <${(sourceEmail.from as any).email}>` : (sourceEmail.from as any)?.email}</p>
+                  <p><span className="font-medium">To:</span> {typeof sourceEmail.to === 'string' ? sourceEmail.to : (sourceEmail.to as any)?.name ? `${(sourceEmail.to as any).name} <${(sourceEmail.to as any).email}>` : (sourceEmail.to as any)?.email}</p>
+                  <p><span className="font-medium">Date:</span> {new Date(sourceEmail.date).toLocaleString()}</p>
                 </div>
 
                 {/* AI-generated badges - filtered same as EmailDetail/EmailList */}
-                {replyTo.badges && replyTo.badges.length > 0 && (
+                {sourceEmail.badges && sourceEmail.badges.length > 0 && (
                   <div className="flex flex-wrap items-center gap-2 mt-3">
-                    {replyTo.badges
+                    {sourceEmail.badges
                       .filter(badge => {
                         const name = badge.name?.toLowerCase() || '';
                         // Filter out importance levels and generic categories
@@ -439,7 +514,7 @@ export default function EmailCompose({
               </div>
 
               {/* AI Summary - same as EmailDetail */}
-              {replyTo.summary && (
+              {sourceEmail.summary && (
                 <div className="bg-gradient-to-r from-primary-50 to-blue-50 dark:from-primary-900/20 dark:to-blue-900/20 border border-primary-200 dark:border-primary-800 rounded-lg p-3 mb-4">
                   <div className="flex items-start gap-2">
                     <svg
@@ -460,7 +535,7 @@ export default function EmailCompose({
                         AI Summary
                       </h3>
                       <p className="text-xs text-gray-700 dark:text-gray-300">
-                        {replyTo.summary}
+                        {sourceEmail.summary}
                       </p>
                     </div>
                   </div>
@@ -469,11 +544,11 @@ export default function EmailCompose({
 
               {/* Email body - same styling as EmailDetail */}
               <div className="max-w-none">
-                {replyTo.htmlBody ? (
+                {sourceEmail.htmlBody ? (
                   <>
                     <div
                       className="email-html-content text-sm text-gray-900 dark:text-gray-100"
-                      dangerouslySetInnerHTML={{ __html: replyTo.htmlBody }}
+                      dangerouslySetInnerHTML={{ __html: sourceEmail.htmlBody }}
                       onClick={(e) => {
                         // Handle link clicks to open in new tab
                         const target = e.target as HTMLElement;
@@ -487,26 +562,26 @@ export default function EmailCompose({
                       }}
                     />
                     {/* Fallback to text if HTML exists but might be invisible */}
-                    {(replyTo.textBody || replyTo.body) && (
+                    {(sourceEmail.textBody || sourceEmail.body) && (
                       <details className="mt-3">
                         <summary className="cursor-pointer text-xs text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200">
                           View plain text version
                         </summary>
                         <pre className="mt-2 whitespace-pre-wrap font-sans text-gray-900 dark:text-gray-100 text-xs border-t pt-2">
-                          {replyTo.textBody || replyTo.body}
+                          {sourceEmail.textBody || sourceEmail.body}
                         </pre>
                       </details>
                     )}
                   </>
                 ) : (
                   <pre className="whitespace-pre-wrap font-sans text-gray-900 dark:text-gray-100 text-xs">
-                    {replyTo.textBody || replyTo.body || 'No content available'}
+                    {sourceEmail.textBody || sourceEmail.body || 'No content available'}
                   </pre>
                 )}
               </div>
               </div>
             </div>
-          )}
+          )})()}
 
           {/* RIGHT SIDE - Reply Compose Box */}
           <div className="flex-1 flex flex-col bg-white dark:bg-gray-800">

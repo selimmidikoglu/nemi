@@ -341,7 +341,7 @@ const SenderAvatar = ({
         alt={companyName || "Company logo"}
         width={size}
         height={size}
-        className="rounded object-contain bg-white flex-shrink-0"
+        className="rounded-full object-cover bg-white flex-shrink-0"
         unoptimized
         onError={() => setCompanyLogoError(true)}
       />
@@ -369,21 +369,33 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isDeleting, setIsDeleting] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
-  const [isCompactWidth, setIsCompactWidth] = useState(false);
+  const [hideBadges, setHideBadges] = useState(false);        // Hide badges when narrow
+  const [stackLayout, setStackLayout] = useState(false);       // Stack HTML card below header when very narrow
   const [hoveredEmailId, setHoveredEmailId] = useState<string | null>(null);
   const [showSnoozeMenu, setShowSnoozeMenu] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const { resolvedTheme } = useTheme();
 
-  // Use ResizeObserver to detect container width and switch to compact mode
+  // Use ResizeObserver for progressive width-based layout changes
+  // Thresholds adapt based on screen size - smaller screens hide badges earlier
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) {
-        // If width is less than 650px, switch to compact mode (hide badges and HTML cards)
-        setIsCompactWidth(entry.contentRect.width < 650);
+        const containerWidth = entry.contentRect.width;
+        const screenWidth = window.innerWidth;
+
+        // Adaptive thresholds based on screen size:
+        // - Large screens (≥1600px): hide badges at 600px container width
+        // - Medium screens (1200-1600px): hide badges at 700px
+        // - Small screens (<1200px, like 14" MacBook): hide badges at 800px
+        const badgeThreshold = screenWidth >= 1600 ? 600 : screenWidth >= 1200 ? 700 : 800;
+        const stackThreshold = 400;
+
+        setHideBadges(containerWidth < badgeThreshold);
+        setStackLayout(containerWidth < stackThreshold);
       }
     });
 
@@ -519,8 +531,8 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
     }
   };
 
-  // Hover Actions Component - Responsive: top-center on large screens, right side on small screens
-  const HoverActions = ({ emailId, hasUnsubscribe, isRead, isSnoozed }: { emailId: string; hasUnsubscribe?: boolean; isRead?: boolean; isSnoozed?: boolean }) => {
+  // Hover Actions Component - Responsive: top-center on large screens, top-right compact on small screens
+  const HoverActions = ({ emailId, hasUnsubscribe, isRead, isSnoozed, compact }: { emailId: string; hasUnsubscribe?: boolean; isRead?: boolean; isSnoozed?: boolean; compact?: boolean }) => {
     const isDark = resolvedTheme === 'dark';
 
     // Vertical gradient for large screens (coming from top)
@@ -642,31 +654,41 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
           )}
         </div>
 
-        {/* Small screen version - Right side slide */}
+        {/* Small screen version - Top right corner when compact, else right side slide */}
         <div
           className={cn(
-            "lg:hidden absolute right-0 top-0 bottom-0 flex items-center gap-0.5 pr-3 pl-10 transition-all duration-500 ease-out z-10",
-            isHovered ? "opacity-100 translate-x-0" : "opacity-0 translate-x-10 pointer-events-none"
+            "lg:hidden absolute flex items-center transition-all duration-300 ease-out z-10",
+            compact
+              ? "right-2 top-1 gap-0 bg-card/95 rounded-lg shadow-sm border border-border/50 px-1 py-0.5"
+              : "right-0 top-0 bottom-0 gap-0.5 pr-3 pl-10",
+            isHovered ? "opacity-100" : "opacity-0 pointer-events-none",
+            !compact && (isHovered ? "translate-x-0" : "translate-x-10")
           )}
-          style={{ background: getHorizontalGradient() }}
+          style={compact ? undefined : { background: getHorizontalGradient() }}
           onClick={(e) => e.stopPropagation()}
         >
           {/* Archive / Unarchive */}
           {isArchivedView && onUnarchiveEmail ? (
             <button
               onClick={(e) => handleQuickUnarchive(e, emailId)}
-              className="p-2 rounded-full hover:bg-green-100 dark:hover:bg-green-900/30 text-muted-foreground hover:text-green-600 transition-all duration-150 hover:scale-110"
+              className={cn(
+                "rounded-full hover:bg-green-100 dark:hover:bg-green-900/30 text-muted-foreground hover:text-green-600 transition-all duration-150",
+                compact ? "p-1" : "p-2 hover:scale-110"
+              )}
               title="Unarchive"
             >
-              <ArchiveRestore className="w-[18px] h-[18px]" />
+              <ArchiveRestore className={compact ? "w-3.5 h-3.5" : "w-[18px] h-[18px]"} />
             </button>
           ) : onArchiveEmail && (
             <button
               onClick={(e) => handleQuickArchive(e, emailId)}
-              className="p-2 rounded-full hover:bg-black/10 dark:hover:bg-white/10 text-muted-foreground hover:text-foreground transition-all duration-150 hover:scale-110"
+              className={cn(
+                "rounded-full hover:bg-black/10 dark:hover:bg-white/10 text-muted-foreground hover:text-foreground transition-all duration-150",
+                compact ? "p-1" : "p-2 hover:scale-110"
+              )}
               title="Archive"
             >
-              <Archive className="w-[18px] h-[18px]" />
+              <Archive className={compact ? "w-3.5 h-3.5" : "w-[18px] h-[18px]"} />
             </button>
           )}
 
@@ -674,10 +696,13 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
           {isSnoozed && onUnsnoozeEmail ? (
             <button
               onClick={(e) => handleQuickUnsnooze(e, emailId)}
-              className="p-2 rounded-full hover:bg-orange-100 dark:hover:bg-orange-900/30 text-orange-500 hover:text-orange-600 transition-all duration-150 hover:scale-110"
+              className={cn(
+                "rounded-full hover:bg-orange-100 dark:hover:bg-orange-900/30 text-orange-500 hover:text-orange-600 transition-all duration-150",
+                compact ? "p-1" : "p-2 hover:scale-110"
+              )}
               title="Unsnooze"
             >
-              <AlarmClockOff className="w-[18px] h-[18px]" />
+              <AlarmClockOff className={compact ? "w-3.5 h-3.5" : "w-[18px] h-[18px]"} />
             </button>
           ) : onSnoozeEmail && (
             <div className="relative">
@@ -687,20 +712,29 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
                   e.preventDefault();
                   setShowSnoozeMenu(showSnoozeMenu === emailId ? null : emailId);
                 }}
-                className="p-2 rounded-full hover:bg-black/10 dark:hover:bg-white/10 text-muted-foreground hover:text-foreground transition-all duration-150 hover:scale-110"
+                className={cn(
+                  "rounded-full hover:bg-black/10 dark:hover:bg-white/10 text-muted-foreground hover:text-foreground transition-all duration-150",
+                  compact ? "p-1" : "p-2 hover:scale-110"
+                )}
                 title="Snooze"
               >
-                <Clock className="w-[18px] h-[18px]" />
+                <Clock className={compact ? "w-3.5 h-3.5" : "w-[18px] h-[18px]"} />
               </button>
 
               {/* Snooze dropdown */}
               {showSnoozeMenu === emailId && (
-                <div className="absolute right-0 top-full mt-1 bg-card border border-border rounded-lg shadow-xl z-50 py-1 min-w-[140px]">
+                <div className={cn(
+                  "absolute top-full mt-1 bg-card border border-border rounded-lg shadow-xl z-50 py-1",
+                  compact ? "right-0 min-w-[120px]" : "right-0 min-w-[140px]"
+                )}>
                   {getSnoozeOptions().map((option) => (
                     <button
                       key={option.label}
                       onClick={(e) => handleQuickSnooze(e, emailId, option.time)}
-                      className="w-full px-3 py-1.5 text-left text-sm hover:bg-accent transition-colors"
+                      className={cn(
+                        "w-full px-3 text-left hover:bg-accent transition-colors",
+                        compact ? "py-1 text-xs" : "py-1.5 text-sm"
+                      )}
                     >
                       {option.label}
                     </button>
@@ -710,25 +744,28 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
             </div>
           )}
 
-          {/* Unsubscribe */}
-          {onUnsubscribe && hasUnsubscribe && (
+          {/* Delete - always show in compact, skip unsubscribe to save space */}
+          {onDeleteEmails && (
+            <button
+              onClick={(e) => handleQuickDelete(e, emailId)}
+              className={cn(
+                "rounded-full hover:bg-red-100 dark:hover:bg-red-900/30 text-muted-foreground hover:text-red-500 transition-all duration-150",
+                compact ? "p-1" : "p-2 hover:scale-110"
+              )}
+              title="Delete"
+            >
+              <Trash2 className={compact ? "w-3.5 h-3.5" : "w-[18px] h-[18px]"} />
+            </button>
+          )}
+
+          {/* Unsubscribe - only show in non-compact mode */}
+          {!compact && onUnsubscribe && hasUnsubscribe && (
             <button
               onClick={(e) => handleQuickUnsubscribe(e, emailId)}
               className="p-2 rounded-full hover:bg-orange-100 dark:hover:bg-orange-900/30 text-muted-foreground hover:text-orange-500 transition-all duration-150 hover:scale-110"
               title="Unsubscribe"
             >
               <MailX className="w-[18px] h-[18px]" />
-            </button>
-          )}
-
-          {/* Delete */}
-          {onDeleteEmails && (
-            <button
-              onClick={(e) => handleQuickDelete(e, emailId)}
-              className="p-2 rounded-full hover:bg-red-100 dark:hover:bg-red-900/30 text-muted-foreground hover:text-red-500 transition-all duration-150 hover:scale-110"
-              title="Delete"
-            >
-              <Trash2 className="w-[18px] h-[18px]" />
             </button>
           )}
         </div>
@@ -858,6 +895,8 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
                     }
                   }
 
+                  const isHovered = hoveredEmailId === mainEmail.id;
+
                   return (
                     <div
                       className="relative group"
@@ -870,19 +909,41 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
                       <button
                         onClick={() => onSelectEmail(mainEmail)}
                         className={cn(
-                          "flex w-full items-center gap-3 px-4 py-2 text-left transition-all duration-200",
-                          mainEmail.isRead ? "bg-white dark:bg-gray-900" : "bg-blue-50 dark:bg-blue-950/40",
+                          "flex w-full items-center gap-2 px-3 py-1 text-left transition-all duration-150 h-8 focus:outline-none",
+                          mainEmail.isRead ? "bg-white dark:bg-gray-900" : "bg-blue-50/50 dark:bg-blue-950/30",
                           selectedIds.has(mainEmail.id) && "bg-primary/10",
-                          "hover:bg-accent/50"
+                          selectedEmailId === mainEmail.id
+                            ? "bg-gradient-to-r from-purple-500/20 via-purple-500/10 to-transparent shadow-[inset_2px_0_0_0_rgb(168,85,247)]"
+                            : "hover:bg-accent/50"
                         )}
                       >
-                        {/* Sender Avatar/Company Logo - same as compact view */}
-                        <div className="flex-shrink-0">
+                        {/* Unread indicator dot */}
+                        <div className={cn(
+                          "w-1.5 h-1.5 rounded-full flex-shrink-0",
+                          mainEmail.isRead ? "bg-transparent" : "bg-blue-500"
+                        )} />
+
+                        {/* Star */}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onToggleStar(mainEmail.id, !mainEmail.isStarred);
+                          }}
+                          className={cn(
+                            "flex-shrink-0 transition-colors",
+                            mainEmail.isStarred ? "text-yellow-500" : "text-gray-300 dark:text-gray-600 hover:text-yellow-500"
+                          )}
+                        >
+                          <Star className={cn("w-3.5 h-3.5", mainEmail.isStarred && "fill-current")} />
+                        </button>
+
+                        {/* Sender Avatar - Small */}
+                        <div className="flex-shrink-0 ml-1">
                           <SenderAvatar
                             key={`avatar-minimal-${mainEmail.id}-${emailAddress}`}
                             email={emailAddress}
                             name={fromText}
-                            size={28}
+                            size={20}
                             companyLogoUrl={validCompanyLogo}
                             companyName={validCompanyName}
                             senderProfilePhotoUrl={mainEmail.senderProfilePhotoUrl}
@@ -890,95 +951,123 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
                         </div>
 
                         {/* Sender Name - Fixed width */}
-                        <div className="flex-shrink-0 w-32 min-w-0">
+                        <div className="flex-shrink-0 w-[130px] min-w-0 ml-1">
                           <span className={cn(
-                            "text-sm truncate block",
-                            mainEmail.isRead ? "text-muted-foreground font-normal" : "text-foreground font-semibold"
+                            "text-[13px] truncate block",
+                            mainEmail.isRead ? "text-muted-foreground" : "text-foreground font-medium"
                           )}>
                             {fromText}
                           </span>
                         </div>
 
-                        {/* Content area: Gmail-style Subject - Preview */}
-                        <div className="flex-1 min-w-0 flex items-center gap-1.5">
-                          {/* Emoji from HTML - only for rich emails */}
-                          {htmlEmoji && (
-                            <span className="flex-shrink-0 text-sm">{htmlEmoji}</span>
-                          )}
-
-                          {/* Subject - primary text */}
+                        {/* Content area: Subject - Preview */}
+                        <div className="flex-1 min-w-0 flex items-center gap-1.5 overflow-hidden">
+                          {/* Subject */}
                           <span className={cn(
-                            "text-sm truncate flex-shrink-0 max-w-[280px]",
-                            mainEmail.isRead ? "text-muted-foreground/80 font-normal" : "text-foreground font-semibold"
+                            "text-[13px] truncate flex-shrink-0 max-w-[240px]",
+                            mainEmail.isRead ? "text-muted-foreground" : "text-foreground font-medium"
                           )}>
-                            {htmlTitle || mainEmail.subject || "No subject"}
+                            {htmlTitle || mainEmail.subject || "(no subject)"}
                           </span>
 
-                          {/* Body preview - Gmail uses dash separator */}
+                          {/* Preview */}
                           {(htmlDescription || mainEmail.summary || mainEmail.body) && (
                             <>
-                              <span className="text-muted-foreground/40 flex-shrink-0">–</span>
-                              <span className="text-sm text-muted-foreground truncate flex-1">
-                                {htmlDescription || mainEmail.summary || (typeof mainEmail.body === "string" ? mainEmail.body.replace(/\s+/g, ' ').substring(0, 100) : "")}
+                              <span className="text-muted-foreground/30 flex-shrink-0">-</span>
+                              <span className="text-[13px] text-muted-foreground/60 truncate">
+                                {htmlDescription || mainEmail.summary || (typeof mainEmail.body === "string" ? mainEmail.body.replace(/\s+/g, ' ').substring(0, 80) : "")}
                               </span>
                             </>
                           )}
                         </div>
 
-                        {/* CTA Button - if available from HTML */}
-                        {htmlButtonText && (
-                          htmlButtonUrl ? (
-                            <a
-                              href={htmlButtonUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onHtmlCardLinkClick?.(mainEmail.id, htmlButtonUrl!);
-                              }}
-                              className="flex-shrink-0 px-2.5 py-1 text-xs font-medium bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
-                            >
-                              {htmlButtonText.length > 12 ? htmlButtonText.substring(0, 12) + '...' : htmlButtonText}
-                            </a>
-                          ) : (
-                            <span className="flex-shrink-0 px-2 py-0.5 text-[10px] font-medium bg-muted text-muted-foreground rounded">
-                              {htmlButtonText.length > 15 ? htmlButtonText.substring(0, 15) + '...' : htmlButtonText}
-                            </span>
-                          )
-                        )}
-
-                        {/* Star - appears on hover or if starred */}
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onToggleStar(mainEmail.id, !mainEmail.isStarred);
-                          }}
-                          className={cn(
-                            "flex-shrink-0 p-1 rounded-full transition-all duration-200",
-                            hoveredEmailId === mainEmail.id || mainEmail.isStarred
-                              ? "opacity-100"
-                              : "opacity-0",
-                            mainEmail.isStarred
-                              ? "text-yellow-500"
-                              : "text-muted-foreground hover:text-yellow-500"
-                          )}
-                        >
-                          <Star className={cn("w-4 h-4", mainEmail.isStarred && "fill-current")} />
-                        </button>
-
-                        {/* Date */}
-                        <div className="flex-shrink-0 text-xs text-muted-foreground w-14 text-right">
+                        {/* Date - hide on hover to make room for actions */}
+                        <div className={cn(
+                          "flex-shrink-0 text-[11px] text-muted-foreground w-[50px] text-right transition-opacity",
+                          isHovered ? "opacity-0" : "opacity-100"
+                        )}>
                           {formatEmailDate(mainEmail.date || mainEmail.createdAt)}
                         </div>
-
-                        {/* Arrow button - appears on hover */}
-                        <div className={cn(
-                          "flex-shrink-0 transition-opacity duration-200",
-                          hoveredEmailId === mainEmail.id ? "opacity-100" : "opacity-0"
-                        )}>
-                          <ChevronRight className="w-4 h-4 text-muted-foreground" />
-                        </div>
                       </button>
+
+                      {/* Hover Actions - Right side */}
+                      <div
+                        className={cn(
+                          "absolute right-1 top-0 bottom-0 flex items-center gap-0.5 transition-all duration-200",
+                          isHovered ? "opacity-100" : "opacity-0 pointer-events-none"
+                        )}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {/* Archive / Unarchive */}
+                        {isArchivedView && onUnarchiveEmail ? (
+                          <button
+                            onClick={(e) => handleQuickUnarchive(e, mainEmail.id)}
+                            className="p-1 rounded hover:bg-green-100 dark:hover:bg-green-900/30 text-muted-foreground hover:text-green-600 transition-colors"
+                            title="Unarchive"
+                          >
+                            <ArchiveRestore className="w-4 h-4" />
+                          </button>
+                        ) : onArchiveEmail && (
+                          <button
+                            onClick={(e) => handleQuickArchive(e, mainEmail.id)}
+                            className="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-muted-foreground hover:text-foreground transition-colors"
+                            title="Archive"
+                          >
+                            <Archive className="w-4 h-4" />
+                          </button>
+                        )}
+
+                        {/* Snooze / Unsnooze */}
+                        {mainEmail.snoozedUntil && onUnsnoozeEmail ? (
+                          <button
+                            onClick={(e) => handleQuickUnsnooze(e, mainEmail.id)}
+                            className="p-1 rounded hover:bg-orange-100 dark:hover:bg-orange-900/30 text-orange-500 hover:text-orange-600 transition-colors"
+                            title="Unsnooze"
+                          >
+                            <AlarmClockOff className="w-4 h-4" />
+                          </button>
+                        ) : onSnoozeEmail && (
+                          <div className="relative">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                e.preventDefault();
+                                setShowSnoozeMenu(showSnoozeMenu === mainEmail.id ? null : mainEmail.id);
+                              }}
+                              className="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-muted-foreground hover:text-foreground transition-colors"
+                              title="Snooze"
+                            >
+                              <Clock className="w-4 h-4" />
+                            </button>
+
+                            {/* Snooze dropdown */}
+                            {showSnoozeMenu === mainEmail.id && (
+                              <div className="absolute right-0 top-full mt-1 bg-card border border-border rounded-lg shadow-xl z-50 py-1 min-w-[120px]">
+                                {getSnoozeOptions().map((option) => (
+                                  <button
+                                    key={option.label}
+                                    onClick={(e) => handleQuickSnooze(e, mainEmail.id, option.time)}
+                                    className="w-full px-3 py-1.5 text-left text-xs hover:bg-accent transition-colors"
+                                  >
+                                    {option.label}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Delete */}
+                        {onDeleteEmails && (
+                          <button
+                            onClick={(e) => handleQuickDelete(e, mainEmail.id)}
+                            className="p-1 rounded hover:bg-red-100 dark:hover:bg-red-900/30 text-muted-foreground hover:text-red-500 transition-colors"
+                            title="Delete"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
                     </div>
                   );
                 })()
@@ -995,10 +1084,12 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
                 <button
                   onClick={() => onSelectEmail(mainEmail)}
                   className={cn(
-                    "flex w-full items-center gap-3 px-4 py-1.5 text-left transition-all duration-200 relative overflow-visible",
+                    "flex w-full items-center gap-3 px-4 py-1.5 text-left transition-all duration-200 relative overflow-visible focus:outline-none",
                     mainEmail.isRead ? "bg-white dark:bg-gray-900" : "bg-blue-50 dark:bg-blue-950/40",
                     selectedIds.has(mainEmail.id) && "bg-primary/10",
-                    "hover:shadow-[inset_4px_0_0_0_hsl(var(--primary)),0_4px_6px_-1px_rgb(0_0_0_/0.1),0_2px_4px_-2px_rgb(0_0_0_/0.1)]"
+                    selectedEmailId === mainEmail.id
+                      ? "bg-gradient-to-r from-purple-500/20 via-purple-500/10 to-transparent shadow-[inset_2px_0_0_0_rgb(168,85,247),0_4px_6px_-1px_rgb(0_0_0_/0.1),0_2px_4px_-2px_rgb(0_0_0_/0.1)]"
+                      : "hover:shadow-[inset_4px_0_0_0_hsl(var(--primary)),0_4px_6px_-1px_rgb(0_0_0_/0.1),0_2px_4px_-2px_rgb(0_0_0_/0.1)]"
                   )}
                 >
                   {/* Read/Unread indicator dot - top left corner */}
@@ -1070,10 +1161,10 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
                     )}
                   </div>
 
-                  {/* Content Preview - Gmail-style: Subject - Body preview */}
+                  {/* Content Preview - Subject/preview or HTML card inline (when not stacked) */}
                   <div className="flex-1 min-w-0 overflow-hidden">
-                    {/* In compact mode: always show text summary, never HTML card */}
-                    {isCompactWidth ? (
+                    {/* When stacked layout OR no HTML card: show text summary */}
+                    {stackLayout || !mainEmail.renderAsHtml || !mainEmail.htmlSnippet ? (
                       <div className="text-sm truncate flex items-center">
                         <span className={cn(
                           "flex-shrink-0",
@@ -1091,35 +1182,15 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
                         )}
                       </div>
                     ) : (
-                      /* Full width mode: show HTML card if available */
-                      mainEmail.renderAsHtml && mainEmail.htmlSnippet ? (
-                        <div className="overflow-hidden">
-                          <EmailHtmlCard htmlContent={mainEmail.htmlSnippet} onCardClick={() => onSelectEmail(mainEmail)} onLinkClick={(url) => onHtmlCardLinkClick?.(mainEmail.id, url)} />
-                        </div>
-                      ) : (
-                        /* Gmail-style: Subject - Body preview */
-                        <div className="text-sm truncate flex items-center">
-                          <span className={cn(
-                            "flex-shrink-0",
-                            mainEmail.isRead ? "text-muted-foreground/80 font-normal" : "text-foreground font-semibold"
-                          )}>
-                            {mainEmail.subject || "No subject"}
-                          </span>
-                          {(mainEmail.summary || mainEmail.body) && (
-                            <>
-                              <span className="text-muted-foreground/40 mx-1.5 flex-shrink-0">–</span>
-                              <span className="text-muted-foreground/60 truncate">
-                                {mainEmail.summary || (typeof mainEmail.body === "string" ? mainEmail.body.replace(/\s+/g, ' ').substring(0, 150) : "")}
-                              </span>
-                            </>
-                          )}
-                        </div>
-                      )
+                      /* Normal width: show HTML card inline */
+                      <div className="max-w-[420px]">
+                        <EmailHtmlCard htmlContent={mainEmail.htmlSnippet} onCardClick={() => onSelectEmail(mainEmail)} onLinkClick={(url) => onHtmlCardLinkClick?.(mainEmail.id, url)} />
+                      </div>
                     )}
                   </div>
 
-                  {/* Badges - Hidden when width is compact */}
-                  {!isCompactWidth && (
+                  {/* Badges - Hidden when narrow */}
+                  {!hideBadges && (
                     <div className="flex flex-wrap items-center gap-1 w-40 flex-shrink-0 overflow-hidden justify-end">
                       {/* Company badge FIRST with logo - only if company matches sender */}
                       {validCompanyName && (
@@ -1161,17 +1232,17 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
                     </div>
                   )}
 
-                  {/* Date / Snooze indicator - Compact when width is small */}
+                  {/* Date / Snooze indicator - Compact when badges hidden */}
                   <div className={cn(
                     "flex-shrink-0 text-right flex items-center gap-1 justify-end",
-                    isCompactWidth ? "text-[10px] w-20" : "text-xs w-28",
+                    hideBadges ? "text-[10px] w-20" : "text-xs w-28",
                     mainEmail.snoozedUntil ? "text-orange-500 dark:text-orange-400" : "text-muted-foreground"
                   )}>
                     {mainEmail.snoozedUntil ? (
                       <>
                         <Clock className="w-3 h-3 flex-shrink-0" />
                         <span title={`Snoozed until ${format(new Date(mainEmail.snoozedUntil), 'PPp')}`}>
-                          {format(new Date(mainEmail.snoozedUntil), isCompactWidth ? 'MMM d' : 'MMM d, h:mm a')}
+                          {format(new Date(mainEmail.snoozedUntil), hideBadges ? 'MMM d' : 'MMM d, h:mm a')}
                         </span>
                       </>
                     ) : (
@@ -1179,13 +1250,28 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
                     )}
                   </div>
 
-                  {/* Show attachment icon inline with date in compact mode */}
-                  {isCompactWidth && mainEmail.hasAttachment && (
+                  {/* Show attachment icon inline with date when badges hidden */}
+                  {hideBadges && mainEmail.hasAttachment && (
                     <Paperclip className="size-3 text-muted-foreground flex-shrink-0" />
                   )}
                 </button>
+
+                {/* HTML Card stacked below when very narrow */}
+                {stackLayout && mainEmail.renderAsHtml && mainEmail.htmlSnippet && (
+                  <div
+                    className="px-4 pb-2 -mt-1 cursor-pointer max-w-[420px]"
+                    onClick={() => onSelectEmail(mainEmail)}
+                  >
+                    <EmailHtmlCard
+                      htmlContent={mainEmail.htmlSnippet}
+                      onCardClick={() => onSelectEmail(mainEmail)}
+                      onLinkClick={(url) => onHtmlCardLinkClick?.(mainEmail.id, url)}
+                    />
+                  </div>
+                )}
+
                 {/* Hover Actions */}
-                <HoverActions emailId={mainEmail.id} hasUnsubscribe={mainEmail.badges?.some((b: any) => b.name === "Newsletter" || b.name === "Promotional")} isRead={mainEmail.isRead} isSnoozed={!!mainEmail.snoozedUntil} />
+                <HoverActions emailId={mainEmail.id} hasUnsubscribe={mainEmail.badges?.some((b: any) => b.name === "Newsletter" || b.name === "Promotional")} isRead={mainEmail.isRead} isSnoozed={!!mainEmail.snoozedUntil} compact={hideBadges} />
                 </div>
               ) : (
                 /* DETAILED VIEW - VERTICAL LAYOUT */
@@ -1200,10 +1286,12 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
                 <button
                   onClick={() => onSelectEmail(mainEmail)}
                   className={cn(
-                    "flex flex-col w-full gap-1.5 px-4 py-2.5 text-left transition-all duration-200 relative",
+                    "flex flex-col w-full gap-1.5 px-4 py-2.5 text-left transition-all duration-200 relative focus:outline-none",
                     mainEmail.isRead ? "bg-white dark:bg-gray-900" : "bg-blue-50 dark:bg-blue-950/40",
                     selectedIds.has(mainEmail.id) && "bg-primary/10",
-                    "hover:shadow-[inset_4px_0_0_0_hsl(var(--primary)),0_4px_6px_-1px_rgb(0_0_0_/0.1),0_2px_4px_-2px_rgb(0_0_0_/0.1)]"
+                    selectedEmailId === mainEmail.id
+                      ? "bg-gradient-to-r from-purple-500/20 via-purple-500/10 to-transparent shadow-[inset_2px_0_0_0_rgb(168,85,247),0_4px_6px_-1px_rgb(0_0_0_/0.1),0_2px_4px_-2px_rgb(0_0_0_/0.1)]"
+                      : "hover:shadow-[inset_4px_0_0_0_hsl(var(--primary)),0_4px_6px_-1px_rgb(0_0_0_/0.1),0_2px_4px_-2px_rgb(0_0_0_/0.1)]"
                   )}
                 >
                   {/* Read/Unread indicator dot - top left corner */}
@@ -1297,7 +1385,7 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
 
                   {/* Row 4: HTML Summary */}
                   {mainEmail.renderAsHtml && mainEmail.htmlSnippet ? (
-                    <div className="pl-11 overflow-hidden">
+                    <div className="pl-11 max-w-[420px]">
                       <EmailHtmlCard htmlContent={mainEmail.htmlSnippet} onCardClick={() => onSelectEmail(mainEmail)} onLinkClick={(url) => onHtmlCardLinkClick?.(mainEmail.id, url)} />
                     </div>
                   ) : (
@@ -1353,88 +1441,211 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
                   </div>
                 </button>
                 {/* Hover Actions */}
-                <HoverActions emailId={mainEmail.id} hasUnsubscribe={mainEmail.badges?.some((b: any) => b.name === "Newsletter" || b.name === "Promotional")} isRead={mainEmail.isRead} isSnoozed={!!mainEmail.snoozedUntil} />
+                <HoverActions emailId={mainEmail.id} hasUnsubscribe={mainEmail.badges?.some((b: any) => b.name === "Newsletter" || b.name === "Promotional")} isRead={mainEmail.isRead} isSnoozed={!!mainEmail.snoozedUntil} compact={hideBadges} />
                 </div>
               )}
 
               {/* Previous Emails in Thread (Replies) */}
               {previousEmails.length > 0 && (
-                <div className="ml-6 mr-4 mb-3 space-y-2 border-l-2 border-primary/30 pl-3">
-                  <div className="flex items-center gap-2 py-1">
-                    <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
-                      {previousEmails.length} previous {previousEmails.length === 1 ? 'reply' : 'replies'}
-                    </div>
-                  </div>
-                  {previousEmails.map((prevEmail) => {
-                    // Parse sender info properly (handles "Name <email>" format)
-                    const prevSender = parseSender(prevEmail.from);
-                    const prevFromText = prevSender.name;
-                    const prevEmailAddress = prevSender.email;
-                    return (
-                      <button
-                        key={prevEmail.id}
-                        onClick={() => onSelectEmail(prevEmail)}
-                        className={cn(
-                          "flex items-center gap-3 w-full text-left py-2.5 px-3 rounded-lg transition-all duration-200",
-                          "bg-card/80 hover:bg-card border border-border/50 hover:border-primary/30",
-                          "hover:shadow-sm"
-                        )}
-                      >
-                        {/* Sender Avatar for reply */}
-                        <SenderAvatar key={`avatar-reply-${prevEmail.id}-${prevEmailAddress}`} email={prevEmailAddress} name={prevFromText} size={20} />
+                viewMode === "minimal" ? (
+                  /* MINIMAL VIEW - One-liner replies with tree branching */
+                  <div className="relative ml-8 mr-4 mb-2">
+                    {/* Vertical connector line from main email */}
+                    <div className="absolute left-0 top-0 bottom-2 w-px bg-border/40" style={{ marginLeft: '-24px' }} />
 
-                        {/* From / Sender Name */}
-                        <div className="flex-shrink-0 w-28 min-w-0">
-                          <div className="text-xs font-medium text-foreground/80 truncate">
-                            {prevFromText}
+                    {previousEmails.map((prevEmail, index) => {
+                      const prevSender = parseSender(prevEmail.from);
+                      const prevFromText = prevSender.name;
+                      const prevEmailAddress = prevSender.email;
+                      return (
+                        <div key={prevEmail.id} className="relative flex items-center mt-0.5 first:mt-0">
+                          {/* Horizontal branch from vertical line */}
+                          <div className="absolute flex items-center" style={{ left: '-24px', top: '50%', transform: 'translateY(-50%)' }}>
+                            <div className="w-5 h-px bg-border/40" />
                           </div>
-                          {/* @YOU badge */}
-                          {prevEmail.isAboutMe && (
-                            <div className="mt-0.5">
-                              <span className="inline-flex items-center gap-0.5 px-1 py-0.5 bg-cyan-100 dark:bg-cyan-900/30 text-cyan-700 dark:text-cyan-300 rounded text-[8px] font-semibold">
-                                <AtSign className="w-2 h-2" />
-                                YOU
+
+                          {/* Number badge at branch connection */}
+                          <div
+                            className="absolute flex items-center justify-center w-4 h-4 rounded-full bg-muted text-[9px] font-medium text-muted-foreground border border-border/50"
+                            style={{ left: '-26px', top: '50%', transform: 'translateY(-50%)' }}
+                          >
+                            {index + 1}
+                          </div>
+
+                          {/* One-liner reply content */}
+                          <button
+                            onClick={() => onSelectEmail(prevEmail)}
+                            className={cn(
+                              "flex w-full items-center gap-2 px-3 py-1 text-left transition-all duration-150 h-8 focus:outline-none rounded",
+                              prevEmail.isRead ? "bg-white dark:bg-gray-900" : "bg-blue-50/50 dark:bg-blue-950/30",
+                              selectedEmailId === prevEmail.id
+                                ? "bg-gradient-to-r from-purple-500/20 via-purple-500/10 to-transparent shadow-[inset_2px_0_0_0_rgb(168,85,247)]"
+                                : "hover:bg-accent/50"
+                            )}
+                          >
+                            {/* Unread indicator dot */}
+                            <div className={cn(
+                              "w-1.5 h-1.5 rounded-full flex-shrink-0",
+                              prevEmail.isRead ? "bg-transparent" : "bg-blue-500"
+                            )} />
+
+                            {/* Star */}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onToggleStar(prevEmail.id, !prevEmail.isStarred);
+                              }}
+                              className={cn(
+                                "flex-shrink-0 transition-colors",
+                                prevEmail.isStarred ? "text-yellow-500" : "text-gray-300 dark:text-gray-600 hover:text-yellow-500"
+                              )}
+                            >
+                              <Star className={cn("w-3.5 h-3.5", prevEmail.isStarred && "fill-current")} />
+                            </button>
+
+                            {/* Sender Avatar */}
+                            <div className="flex-shrink-0 ml-1">
+                              <SenderAvatar
+                                key={`avatar-minimal-reply-${prevEmail.id}-${prevEmailAddress}`}
+                                email={prevEmailAddress}
+                                name={prevFromText}
+                                size={20}
+                              />
+                            </div>
+
+                            {/* Sender Name - Fixed width */}
+                            <div className="flex-shrink-0 w-[130px] min-w-0 ml-1">
+                              <span className={cn(
+                                "text-[13px] truncate block",
+                                prevEmail.isRead ? "text-muted-foreground" : "text-foreground font-medium"
+                              )}>
+                                {prevFromText}
                               </span>
                             </div>
-                          )}
-                        </div>
 
-                        {/* AI Summary */}
-                        <div className="flex-1 min-w-0">
-                          {prevEmail.summary && typeof prevEmail.summary === "string" ? (
-                            <div className="text-xs text-muted-foreground line-clamp-1">
-                              <span className="text-indigo-500 dark:text-indigo-400 mr-1">✦</span>
-                              {prevEmail.summary}
+                            {/* Content area: Subject - Preview */}
+                            <div className="flex-1 min-w-0 flex items-center gap-1.5 overflow-hidden">
+                              <span className={cn(
+                                "text-[13px] truncate flex-shrink-0 max-w-[240px]",
+                                prevEmail.isRead ? "text-muted-foreground" : "text-foreground font-medium"
+                              )}>
+                                {prevEmail.subject || "(no subject)"}
+                              </span>
+
+                              {(prevEmail.summary || prevEmail.body) && (
+                                <>
+                                  <span className="text-muted-foreground/30 flex-shrink-0">-</span>
+                                  <span className="text-[13px] text-muted-foreground/60 truncate">
+                                    {prevEmail.summary || (typeof prevEmail.body === "string" ? prevEmail.body.replace(/\s+/g, ' ').substring(0, 80) : "")}
+                                  </span>
+                                </>
+                              )}
                             </div>
-                          ) : prevEmail.body && typeof prevEmail.body === "string" ? (
-                            <div className="text-xs text-muted-foreground line-clamp-1">
-                              {prevEmail.body.substring(0, 100)}...
+
+                            {/* Date */}
+                            <div className="flex-shrink-0 text-[11px] text-muted-foreground w-[50px] text-right">
+                              {formatEmailDate(prevEmail.date || prevEmail.createdAt)}
                             </div>
-                          ) : null}
+                          </button>
                         </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  /* COMPACT/DETAILED VIEW - Tree View with cards */
+                  <div className="relative ml-10 mr-4 mb-3">
+                    {/* Vertical connector line from main email */}
+                    <div className="absolute left-0 top-0 bottom-4 w-px bg-border/40" style={{ marginLeft: '-24px' }} />
 
-                        {/* Badges */}
-                        <div className="flex items-center gap-1 flex-shrink-0">
-                          {filterMeaningfulBadges(prevEmail.badges, prevEmail.companyName).slice(0, 2).map((badge: any, index: number) => (
-                            <Badge
-                              key={index}
-                              variant="outline"
-                              className="px-1.5 py-0 text-[9px] font-medium border h-auto"
-                              style={getBadgeStyle(badge.color)}
-                            >
-                              <span className="truncate max-w-[60px]">{badge.name}</span>
-                            </Badge>
-                          ))}
-                        </div>
+                    {previousEmails.map((prevEmail, index) => {
+                      const prevSender = parseSender(prevEmail.from);
+                      const prevFromText = prevSender.name;
+                      const prevEmailAddress = prevSender.email;
+                      return (
+                        <div key={prevEmail.id} className="relative flex items-start mt-2 first:mt-0">
+                          {/* Horizontal branch from vertical line */}
+                          <div className="absolute flex items-center" style={{ left: '-24px', top: '14px' }}>
+                            <div className="w-5 h-px bg-border/40" />
+                          </div>
 
-                        {/* Date */}
-                        <div className="flex-shrink-0 text-[10px] text-muted-foreground w-16 text-right">
-                          {formatEmailDate(prevEmail.date || prevEmail.createdAt)}
+                          {/* Number badge at branch connection */}
+                          <div
+                            className="absolute flex items-center justify-center w-4 h-4 rounded-full bg-muted text-[9px] font-medium text-muted-foreground border border-border/50"
+                            style={{ left: '-28px', top: '10px' }}
+                          >
+                            {index + 1}
+                          </div>
+
+                          {/* Reply content card */}
+                          <button
+                            onClick={() => onSelectEmail(prevEmail)}
+                            className={cn(
+                              "flex items-center gap-3 w-full text-left py-2 px-3 rounded-lg transition-all duration-200",
+                              "bg-muted/30 hover:bg-muted/50 border border-transparent hover:border-border/50"
+                            )}
+                          >
+                            <SenderAvatar key={`avatar-reply-${prevEmail.id}-${prevEmailAddress}`} email={prevEmailAddress} name={prevFromText} size={20} />
+
+                            <div className="flex-shrink-0 w-24 min-w-0">
+                              <div className="text-xs font-medium text-foreground/80 truncate">
+                                {prevFromText}
+                              </div>
+                              {prevEmail.isAboutMe && (
+                                <div className="mt-0.5">
+                                  <span className="inline-flex items-center gap-0.5 px-1 py-0.5 bg-cyan-100 dark:bg-cyan-900/30 text-cyan-700 dark:text-cyan-300 rounded text-[8px] font-semibold">
+                                    <AtSign className="w-2 h-2" />
+                                    YOU
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="flex-1 min-w-0">
+                              {prevEmail.renderAsHtml && prevEmail.htmlSnippet ? (
+                                <div onClick={(e) => e.stopPropagation()} className="max-w-[420px]">
+                                  <EmailHtmlCard
+                                    htmlContent={prevEmail.htmlSnippet}
+                                    className="scale-[0.85] origin-top-left"
+                                    onCardClick={() => onSelectEmail(prevEmail)}
+                                    onLinkClick={(url) => onHtmlCardLinkClick?.(prevEmail.id, url)}
+                                  />
+                                </div>
+                              ) : prevEmail.summary && typeof prevEmail.summary === "string" ? (
+                                <div className="text-xs text-muted-foreground line-clamp-1">
+                                  <span className="text-indigo-500 dark:text-indigo-400 mr-1">✦</span>
+                                  {prevEmail.summary}
+                                </div>
+                              ) : prevEmail.body && typeof prevEmail.body === "string" ? (
+                                <div className="text-xs text-muted-foreground line-clamp-1">
+                                  {prevEmail.body.substring(0, 100)}...
+                                </div>
+                              ) : null}
+                            </div>
+
+                            {!hideBadges && (
+                              <div className="flex items-center gap-1 flex-shrink-0">
+                                {filterMeaningfulBadges(prevEmail.badges, prevEmail.companyName).slice(0, 2).map((badge: any, badgeIndex: number) => (
+                                  <Badge
+                                    key={badgeIndex}
+                                    variant="outline"
+                                    className="px-1.5 py-0 text-[9px] font-medium border h-auto"
+                                    style={getBadgeStyle(badge.color)}
+                                  >
+                                    <span className="truncate max-w-[60px]">{badge.name}</span>
+                                  </Badge>
+                                ))}
+                              </div>
+                            )}
+
+                            <div className="flex-shrink-0 text-[10px] text-muted-foreground/60 w-16 text-right">
+                              {formatEmailDate(prevEmail.date || prevEmail.createdAt)}
+                            </div>
+                          </button>
                         </div>
-                      </button>
-                    );
-                  })}
-                </div>
+                      );
+                    })}
+                  </div>
+                )
               )}
             </div>
           );

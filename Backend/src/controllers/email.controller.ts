@@ -385,7 +385,163 @@ export class EmailController {
   };
 
   /**
-   * Send an email (new or reply)
+   * Schedule an email for sending with undo capability (10 second delay)
+   */
+  scheduleEmail = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const userId = req.userId!;
+      const {
+        to,
+        cc,
+        bcc,
+        subject,
+        text,
+        html,
+        inReplyTo,
+        emailAccountId,
+        sendAt, // Optional: for scheduled send feature
+        undoDelay = 10 // Default 10 seconds for undo
+      } = req.body;
+
+      logger.info(`Scheduling email for user ${userId} from account ${emailAccountId}`);
+
+      // Calculate when to actually send
+      const scheduledFor = sendAt
+        ? new Date(sendAt)
+        : new Date(Date.now() + undoDelay * 1000);
+
+      // Save to scheduled_emails table
+      const result = await dbQuery(
+        `INSERT INTO scheduled_emails (
+          user_id, email_account_id, to_recipients, cc_recipients, bcc_recipients,
+          subject, text_body, html_body, in_reply_to, scheduled_for, status
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending')
+        RETURNING id, scheduled_for`,
+        [
+          userId,
+          emailAccountId,
+          JSON.stringify(to),
+          cc ? JSON.stringify(cc) : null,
+          bcc ? JSON.stringify(bcc) : null,
+          subject,
+          text,
+          html,
+          inReplyTo,
+          scheduledFor
+        ]
+      );
+
+      const scheduledEmail = result.rows[0];
+
+      logger.info(`Email scheduled: ${scheduledEmail.id}, will send at ${scheduledEmail.scheduled_for}`);
+
+      res.json({
+        success: true,
+        scheduledEmailId: scheduledEmail.id,
+        scheduledFor: scheduledEmail.scheduled_for,
+        canUndoUntil: scheduledFor.toISOString(),
+        message: sendAt ? 'Email scheduled successfully' : `Email will be sent in ${undoDelay} seconds`
+      });
+    } catch (error: any) {
+      logger.error('Schedule email error:', error);
+      res.status(500).json({
+        error: 'Failed to schedule email',
+        message: error.message || 'Unknown error'
+      });
+    }
+  };
+
+  /**
+   * Cancel a scheduled email (undo send)
+   */
+  cancelScheduledEmail = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const userId = req.userId!;
+      const { id } = req.params;
+
+      // Check if email exists and is still pending
+      const checkResult = await dbQuery(
+        `SELECT id, status, scheduled_for FROM scheduled_emails
+         WHERE id = $1 AND user_id = $2`,
+        [id, userId]
+      );
+
+      if (checkResult.rows.length === 0) {
+        res.status(404).json({ error: 'Scheduled email not found' });
+        return;
+      }
+
+      const scheduledEmail = checkResult.rows[0];
+
+      if (scheduledEmail.status !== 'pending') {
+        res.status(400).json({
+          error: 'Cannot cancel email',
+          message: scheduledEmail.status === 'sent'
+            ? 'Email has already been sent'
+            : 'Email has already been cancelled'
+        });
+        return;
+      }
+
+      // Cancel the email
+      await dbQuery(
+        `UPDATE scheduled_emails SET status = 'cancelled', updated_at = NOW() WHERE id = $1`,
+        [id]
+      );
+
+      logger.info(`Scheduled email ${id} cancelled by user ${userId}`);
+
+      res.json({
+        success: true,
+        message: 'Email cancelled successfully'
+      });
+    } catch (error: any) {
+      logger.error('Cancel scheduled email error:', error);
+      res.status(500).json({
+        error: 'Failed to cancel email',
+        message: error.message || 'Unknown error'
+      });
+    }
+  };
+
+  /**
+   * Get pending scheduled emails
+   */
+  getScheduledEmails = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const userId = req.userId!;
+
+      const result = await dbQuery(
+        `SELECT id, email_account_id, to_recipients, subject, scheduled_for, status, created_at
+         FROM scheduled_emails
+         WHERE user_id = $1 AND status = 'pending' AND scheduled_for > NOW()
+         ORDER BY scheduled_for ASC`,
+        [userId]
+      );
+
+      res.json({
+        success: true,
+        scheduledEmails: result.rows.map(row => ({
+          id: row.id,
+          emailAccountId: row.email_account_id,
+          to: JSON.parse(row.to_recipients),
+          subject: row.subject,
+          scheduledFor: row.scheduled_for,
+          status: row.status,
+          createdAt: row.created_at
+        }))
+      });
+    } catch (error: any) {
+      logger.error('Get scheduled emails error:', error);
+      res.status(500).json({
+        error: 'Failed to get scheduled emails',
+        message: error.message || 'Unknown error'
+      });
+    }
+  };
+
+  /**
+   * Send an email (new or reply) - immediate send without undo
    */
   sendEmail = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
     try {

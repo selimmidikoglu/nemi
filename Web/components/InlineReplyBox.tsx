@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from 'react'
 import { Send, Paperclip, Image as ImageIcon, Smile, Bold, Italic, Underline, Link as LinkIcon, X, Loader2 } from 'lucide-react'
 import data from '@emoji-mart/data'
 import Picker from '@emoji-mart/react'
-import type { EmailAddress } from '@/types'
+import type { EmailAddress, SuggestedReply } from '@/types'
 import type { SendEmailData } from './EmailCompose'
 
 interface InlineReplyBoxProps {
@@ -14,11 +14,8 @@ interface InlineReplyBoxProps {
   subject: string
   emailAccountId: string
   originalEmailId: string
-  suggestedReplies?: {
-    quick: string
-    standard: string
-    detailed: string
-  } | null
+  suggestedReplies?: SuggestedReply[] | null
+  isAnswerable?: boolean
 }
 
 export default function InlineReplyBox({
@@ -28,14 +25,15 @@ export default function InlineReplyBox({
   subject,
   emailAccountId,
   originalEmailId,
-  suggestedReplies
+  suggestedReplies,
+  isAnswerable = true
 }: InlineReplyBoxProps) {
   const [body, setBody] = useState('')
   const [isSending, setIsSending] = useState(false)
   const [showCc, setShowCc] = useState(false)
   const [cc, setCc] = useState('')
   const [bcc, setBcc] = useState('')
-  const [selectedReply, setSelectedReply] = useState<'quick' | 'standard' | 'detailed' | null>(null)
+  const [selectedReplyIndex, setSelectedReplyIndex] = useState<number | null>(null)
   const [attachments, setAttachments] = useState<File[]>([])
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
   const [showLinkModal, setShowLinkModal] = useState(false)
@@ -116,10 +114,30 @@ export default function InlineReplyBox({
     }
   }
 
-  const handleSelectReply = (type: 'quick' | 'standard' | 'detailed') => {
-    if (!suggestedReplies) return
-    setBody(suggestedReplies[type])
-    setSelectedReply(type)
+  const handleSelectReply = (index: number) => {
+    if (!suggestedReplies || !suggestedReplies[index]) return
+    setBody(suggestedReplies[index].text)
+    setSelectedReplyIndex(index)
+  }
+
+  // Get approach display label
+  const getApproachLabel = (approach: string): string => {
+    const labels: Record<string, string> = {
+      'direct_accept': 'Accept',
+      'conditional': 'Conditional',
+      'defer': 'Defer',
+      'defer_alternative': 'Suggest Alternative',
+      'ask_clarification': 'Ask Question',
+      'polite_decline': 'Decline',
+      'suggest_alternative': 'Alternative'
+    }
+    return labels[approach] || approach.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
+  }
+
+  // Get approach color
+  const getApproachColor = (index: number): string => {
+    const colors = ['blue', 'purple', 'amber']
+    return colors[index] || 'gray'
   }
 
   // Handle file attachment
@@ -275,50 +293,62 @@ export default function InlineReplyBox({
         </div>
       )}
 
-      {/* Smart Reply Suggestions */}
-      {suggestedReplies && !body && (
+      {/* Smart Reply Suggestions - Only show for answerable emails with suggestions */}
+      {isAnswerable && suggestedReplies && suggestedReplies.length > 0 && !body && (
         <div className="px-6 py-4 bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-900/20 dark:to-purple-900/20 border-b border-gray-200 dark:border-gray-700">
           <div className="flex items-start gap-2 mb-3">
             <Smile className="w-4 h-4 text-blue-600 dark:text-blue-400 mt-0.5" />
             <span className="text-sm font-medium text-gray-700 dark:text-gray-300">AI-suggested replies:</span>
           </div>
           <div className="space-y-2">
-            <button
-              onClick={() => handleSelectReply('quick')}
-              className="w-full text-left px-4 py-3 bg-white dark:bg-gray-800 hover:bg-blue-50 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg transition-all group"
-            >
-              <div className="flex items-start justify-between gap-2">
-                <div className="flex-1">
-                  <div className="text-xs font-semibold text-blue-600 dark:text-blue-400 mb-1">Quick Reply</div>
-                  <div className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed">{suggestedReplies.quick}</div>
-                </div>
-                <div className="text-xs text-gray-400 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">Click to use</div>
-              </div>
-            </button>
-            <button
-              onClick={() => handleSelectReply('standard')}
-              className="w-full text-left px-4 py-3 bg-white dark:bg-gray-800 hover:bg-blue-50 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg transition-all group"
-            >
-              <div className="flex items-start justify-between gap-2">
-                <div className="flex-1">
-                  <div className="text-xs font-semibold text-purple-600 dark:text-purple-400 mb-1">Standard Reply</div>
-                  <div className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed">{suggestedReplies.standard}</div>
-                </div>
-                <div className="text-xs text-gray-400 group-hover:text-purple-600 dark:group-hover:text-purple-400 transition-colors">Click to use</div>
-              </div>
-            </button>
-            <button
-              onClick={() => handleSelectReply('detailed')}
-              className="w-full text-left px-4 py-3 bg-white dark:bg-gray-800 hover:bg-blue-50 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg transition-all group"
-            >
-              <div className="flex items-start justify-between gap-2">
-                <div className="flex-1">
-                  <div className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 mb-1">Detailed Reply</div>
-                  <div className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed">{suggestedReplies.detailed}</div>
-                </div>
-                <div className="text-xs text-gray-400 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">Click to use</div>
-              </div>
-            </button>
+            {suggestedReplies.map((reply, index) => {
+              const colorClass = getApproachColor(index)
+              const colorStyles: Record<string, { label: string; hover: string; text: string }> = {
+                blue: {
+                  label: 'text-blue-600 dark:text-blue-400',
+                  hover: 'hover:bg-blue-50 dark:hover:bg-blue-900/30',
+                  text: 'group-hover:text-blue-600 dark:group-hover:text-blue-400'
+                },
+                purple: {
+                  label: 'text-purple-600 dark:text-purple-400',
+                  hover: 'hover:bg-purple-50 dark:hover:bg-purple-900/30',
+                  text: 'group-hover:text-purple-600 dark:group-hover:text-purple-400'
+                },
+                amber: {
+                  label: 'text-amber-600 dark:text-amber-400',
+                  hover: 'hover:bg-amber-50 dark:hover:bg-amber-900/30',
+                  text: 'group-hover:text-amber-600 dark:group-hover:text-amber-400'
+                },
+                gray: {
+                  label: 'text-gray-600 dark:text-gray-400',
+                  hover: 'hover:bg-gray-50 dark:hover:bg-gray-700',
+                  text: 'group-hover:text-gray-600 dark:group-hover:text-gray-400'
+                }
+              }
+              const colors = colorStyles[colorClass] || colorStyles.gray
+
+              return (
+                <button
+                  key={index}
+                  onClick={() => handleSelectReply(index)}
+                  className={`w-full text-left px-4 py-3 bg-white dark:bg-gray-800 ${colors.hover} border border-gray-200 dark:border-gray-600 rounded-lg transition-all group`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1">
+                      <div className={`text-xs font-semibold ${colors.label} mb-1`}>
+                        {getApproachLabel(reply.approach)}
+                      </div>
+                      <div className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed">
+                        {reply.text}
+                      </div>
+                    </div>
+                    <div className={`text-xs text-gray-400 ${colors.text} transition-colors whitespace-nowrap`}>
+                      Click to use
+                    </div>
+                  </div>
+                </button>
+              )
+            })}
           </div>
         </div>
       )}

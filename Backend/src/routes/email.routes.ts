@@ -281,4 +281,44 @@ router.post('/:id/trash', emailController.trashEmail);
  */
 router.delete('/:id/trash', emailController.restoreEmail);
 
+// ============================================
+// SCHEDULED EMAILS / UNDO SEND ROUTES
+// ============================================
+
+/**
+ * POST /api/emails/schedule
+ * Schedule an email for sending (with undo capability)
+ */
+router.post(
+  '/schedule',
+  [
+    body('to').isArray().notEmpty(),
+    body('to.*.email').isEmail(),
+    body('to.*.name').optional().isString(),
+    body('cc').optional().isArray(),
+    body('bcc').optional().isArray(),
+    body('subject').isString().notEmpty(),
+    body('text').optional().isString(),
+    body('html').optional().isString(),
+    body('inReplyTo').optional().isString(),
+    body('emailAccountId').isUUID(),
+    body('sendAt').optional().isISO8601(),
+    body('undoDelay').optional().isInt({ min: 5, max: 30 }),
+    validateRequest
+  ],
+  emailController.scheduleEmail
+);
+
+/**
+ * GET /api/emails/scheduled
+ * Get pending scheduled emails
+ */
+router.get('/scheduled', emailController.getScheduledEmails);
+
+/**
+ * DELETE /api/emails/scheduled/:id
+ * Cancel a scheduled email (undo send)
+ */
+router.delete('/scheduled/:id', emailController.cancelScheduledEmail);
+
 export default router;

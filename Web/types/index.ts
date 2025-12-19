@@ -15,6 +15,86 @@ export interface EmailBadge {
   category: string
 }
 
+// Suggested Reply type (AI-generated response options)
+export interface SuggestedReply {
+  text: string
+  approach: string  // e.g., 'direct_accept', 'conditional', 'defer', 'ask_clarification', 'polite_decline'
+}
+
+// Extracted Action type (deadlines, reminders, tasks from emails)
+export interface ExtractedAction {
+  type: 'deadline' | 'reminder' | 'task'
+  title: string
+  date: string | null
+  priority: 'high' | 'medium' | 'low'
+  source_text: string
+  calendar_type: 'your_life' | 'reminder'
+}
+
+// Email Action (stored in database with status)
+export interface EmailAction {
+  id: string
+  emailId?: string
+  userId: string
+  actionType: 'deadline' | 'reminder' | 'task'
+  title: string
+  description?: string
+  dueDate: string | null
+  priority: 'high' | 'medium' | 'low'
+  status: 'pending' | 'completed' | 'dismissed'
+  calendarType: 'your_life' | 'reminder'
+  sourceText?: string
+  createdAt: string
+  completedAt?: string
+  // For Google Calendar sync
+  googleCalendarEventId?: string
+  syncedToCalendar?: boolean
+  // Additional fields from email join
+  emailSubject?: string
+  fromEmail?: string
+  fromName?: string
+}
+
+// Actions API Response
+export interface ActionsResponse {
+  actions: EmailAction[]
+  counts: {
+    your_life: { pending: number; completed: number; dismissed: number }
+    reminder: { pending: number; completed: number; dismissed: number }
+  }
+  pagination?: {
+    limit: number
+    offset: number
+    total: number
+  }
+}
+
+// Action Counts for sidebar badges
+export interface ActionCounts {
+  your_life: { pending: number; overdue: number; upcoming: number }
+  reminder: { pending: number; overdue: number; upcoming: number }
+  total: { pending: number; overdue: number; upcoming: number }
+}
+
+// Calendar Event (extracted from emails - meetings + deadlines)
+export interface CalendarEvent {
+  id: string
+  type: 'meeting' | 'deadline'
+  title: string
+  time: string
+  // Meeting-specific fields
+  url?: string
+  platform?: string
+  fromEmail?: string
+  fromName?: string
+  // Deadline-specific fields
+  priority?: 'high' | 'medium' | 'low'
+  emailSubject?: string
+  // Common fields
+  emailId?: string
+  accountEmail?: string
+}
+
 // Email address type
 export interface EmailAddress {
   email: string
@@ -59,13 +139,11 @@ export interface Email {
   htmlSnippet?: string | null    // Beautiful HTML card for special emails
   renderAsHtml?: boolean         // True if should display HTML card instead of summary
 
-  // NEW: AI-powered reply assistance (2025-11-15)
-  isAnswerable?: boolean         // True if email expects/requires a reply
-  suggestedReplies?: {           // Pre-generated reply options from AI
-    quick: string                // Brief 1-sentence response (10-15 words)
-    standard: string             // Professional 2-3 sentence reply (30-50 words)
-    detailed: string             // Comprehensive response (60-100 words)
-  } | null
+  // NEW: AI-powered reply assistance (2025-12-16)
+  isAnswerable?: boolean                           // True if email expects/requires a reply
+  responseUrgency?: 'immediate' | 'today' | 'this_week' | 'whenever' | 'none'  // How urgently response is needed
+  suggestedReplies?: SuggestedReply[]              // 3 different approach options from AI
+  extractedActions?: ExtractedAction[]             // Deadlines, reminders, tasks extracted from email
 
   // Snooze and Archive features
   snoozedUntil?: string | null   // ISO timestamp when snooze expires

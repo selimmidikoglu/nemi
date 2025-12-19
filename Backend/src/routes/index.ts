@@ -10,6 +10,7 @@ import outlookWebhookRoutes from './outlook-webhook.routes';
 import unsubscribeRoutes from './unsubscribe.routes';
 import contactsRoutes from './contacts.routes';
 import searchRoutes from './search.routes';
+import actionsRoutes from './actions.routes';
 
 export const setupRoutes = (app: Application): void => {
   const API_PREFIX = '/api';
@@ -26,4 +27,5 @@ export const setupRoutes = (app: Application): void => {
   app.use(`${API_PREFIX}/unsubscribe`, unsubscribeRoutes);
   app.use(`${API_PREFIX}/contacts`, contactsRoutes);
   app.use(`${API_PREFIX}/search`, searchRoutes);
+  app.use(`${API_PREFIX}/actions`, actionsRoutes);
 };

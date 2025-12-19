@@ -10,6 +10,10 @@ import type {
   PaginatedResponse,
   EmailQueryParams,
   Session,
+  EmailAction,
+  ActionsResponse,
+  ActionCounts,
+  CalendarEvent,
 } from '@/types'
 
 // Helper to get the appropriate storage based on rememberMe setting
@@ -292,9 +296,50 @@ class ApiService {
     }
   }
 
-  async getEmailById(id: number): Promise<Email> {
-    const response = await this.api.get<Email>(`/api/emails/${id}`)
-    return response.data
+  async getEmailById(id: string): Promise<Email> {
+    const response = await this.api.get<any>(`/api/emails/${id}`)
+    const email = response.data.data || response.data
+    return {
+      id: email.id,
+      messageId: email.message_id || email.messageId,
+      threadId: email.thread_id || email.threadId,
+      subject: email.subject,
+      from: email.from_email || email.from,
+      to: email.to_email || email.to,
+      cc: email.cc,
+      bcc: email.bcc,
+      replyTo: email.reply_to || email.replyTo,
+      date: email.date,
+      body: email.body,
+      htmlBody: email.html_body || email.htmlBody,
+      textBody: email.text_body || email.textBody,
+      summary: email.summary,
+      isRead: email.is_read ?? email.isRead ?? false,
+      isStarred: email.is_starred ?? email.isStarred ?? false,
+      importance: email.importance,
+      category: email.category,
+      isMeRelated: email.is_me_related || email.isMeRelated,
+      hasAttachment: email.has_attachment || email.hasAttachment,
+      tags: email.tags || [],
+      badges: email.badges || [],
+      companyName: email.company_name || email.companyName,
+      companyDomain: email.company_domain || email.companyDomain,
+      companyLogoUrl: email.company_logo_url || email.companyLogoUrl,
+      senderProfilePhotoUrl: email.sender_profile_photo_url || email.senderProfilePhotoUrl,
+      emailAccountId: email.email_account_id || email.emailAccountId,
+      createdAt: email.created_at || email.createdAt,
+      updatedAt: email.updated_at || email.updatedAt,
+      isAboutMe: email.is_about_me || email.isAboutMe,
+      mentionContext: email.mention_context || email.mentionContext,
+      htmlSnippet: email.html_snippet || email.htmlSnippet,
+      renderAsHtml: email.render_as_html || email.renderAsHtml,
+      isAnswerable: email.is_answerable || email.isAnswerable,
+      responseUrgency: email.response_urgency || email.responseUrgency,
+      suggestedReplies: email.suggested_replies || email.suggestedReplies,
+      extractedActions: email.extracted_actions || email.extractedActions,
+      snoozedUntil: email.snoozed_until || email.snoozedUntil,
+      isArchived: email.is_archived || email.isArchived,
+    }
   }
 
   async markEmailAsRead(id: string, isRead: boolean): Promise<Email> {
@@ -738,6 +783,192 @@ class ApiService {
     })
     return response.data.contacts || []
   }
+
+  // ==========================================
+  // Actions API (Deadlines, Reminders, Tasks)
+  // ==========================================
+
+  async getActions(params?: {
+    status?: 'pending' | 'completed' | 'dismissed' | 'all';
+    calendarType?: 'your_life' | 'reminder';
+    actionType?: 'deadline' | 'reminder' | 'task';
+    limit?: number;
+    offset?: number;
+  }): Promise<ActionsResponse> {
+    const response = await this.api.get<any>('/api/actions', { params })
+    return {
+      actions: (response.data.data?.actions || []).map(this.formatAction),
+      counts: response.data.data?.counts || {
+        your_life: { pending: 0, completed: 0, dismissed: 0 },
+        reminder: { pending: 0, completed: 0, dismissed: 0 }
+      },
+      pagination: response.data.data?.pagination
+    }
+  }
+
+  async getDeadlines(days: number = 30): Promise<EmailAction[]> {
+    const response = await this.api.get<any>('/api/actions/deadlines', {
+      params: { days }
+    })
+    return (response.data.data || []).map(this.formatAction)
+  }
+
+  async getReminders(): Promise<EmailAction[]> {
+    const response = await this.api.get<any>('/api/actions/reminders')
+    return (response.data.data || []).map(this.formatAction)
+  }
+
+  async getActionCounts(): Promise<ActionCounts> {
+    const response = await this.api.get<any>('/api/actions/counts')
+    return response.data.data || {
+      your_life: { pending: 0, overdue: 0, upcoming: 0 },
+      reminder: { pending: 0, overdue: 0, upcoming: 0 },
+      total: { pending: 0, overdue: 0, upcoming: 0 }
+    }
+  }
+
+  async createAction(data: {
+    emailId?: string;
+    actionType?: 'deadline' | 'reminder' | 'task';
+    title: string;
+    description?: string;
+    dueDate?: string;
+    priority?: 'high' | 'medium' | 'low';
+    calendarType?: 'your_life' | 'reminder';
+  }): Promise<EmailAction> {
+    const response = await this.api.post<any>('/api/actions', data)
+    return this.formatAction(response.data.data)
+  }
+
+  async updateAction(id: string, data: {
+    title?: string;
+    description?: string;
+    dueDate?: string;
+    priority?: 'high' | 'medium' | 'low';
+    calendarType?: 'your_life' | 'reminder';
+  }): Promise<EmailAction> {
+    const response = await this.api.patch<any>(`/api/actions/${id}`, data)
+    return this.formatAction(response.data.data)
+  }
+
+  async completeAction(id: string): Promise<EmailAction> {
+    const response = await this.api.post<any>(`/api/actions/${id}/complete`)
+    return this.formatAction(response.data.data)
+  }
+
+  async dismissAction(id: string): Promise<EmailAction> {
+    const response = await this.api.post<any>(`/api/actions/${id}/dismiss`)
+    return this.formatAction(response.data.data)
+  }
+
+  async reopenAction(id: string): Promise<EmailAction> {
+    const response = await this.api.post<any>(`/api/actions/${id}/reopen`)
+    return this.formatAction(response.data.data)
+  }
+
+  async deleteAction(id: string): Promise<void> {
+    await this.api.delete(`/api/actions/${id}`)
+  }
+
+  async getCalendarEvents(days: number = 30): Promise<CalendarEvent[]> {
+    const response = await this.api.get<any>('/api/actions/calendar', {
+      params: { days }
+    })
+    return (response.data.data || []).map((event: any) => ({
+      id: event.id,
+      type: event.type,
+      title: event.title,
+      time: event.time,
+      url: event.url,
+      platform: event.platform,
+      fromEmail: event.fromEmail,
+      fromName: event.fromName,
+      priority: event.priority,
+      emailSubject: event.emailSubject,
+      emailId: event.emailId,
+      accountEmail: event.accountEmail,
+    }))
+  }
+
+  private formatAction(action: any): EmailAction {
+    return {
+      id: action.id,
+      emailId: action.emailId || action.email_id,
+      userId: action.userId || action.user_id,
+      actionType: action.actionType || action.action_type,
+      title: action.title,
+      description: action.description,
+      dueDate: action.dueDate || action.due_date,
+      priority: action.priority,
+      status: action.status,
+      calendarType: action.calendarType || action.calendar_type,
+      sourceText: action.sourceText || action.source_text,
+      createdAt: action.createdAt || action.created_at,
+      completedAt: action.completedAt || action.completed_at,
+      googleCalendarEventId: action.googleCalendarEventId || action.google_calendar_event_id,
+      syncedToCalendar: action.syncedToCalendar || action.synced_to_calendar,
+      // Additional fields from join
+      emailSubject: action.emailSubject || action.email_subject,
+      fromEmail: action.fromEmail || action.from_email,
+      fromName: action.fromName || action.from_name,
+    }
+  }
+
+  // ==========================================
+  // Scheduled Email / Undo Send API
+  // ==========================================
+
+  /**
+   * Schedule an email for sending with undo capability
+   * @param emailData - Email content and recipients
+   * @param undoDelay - Seconds before sending (default 10, for undo feature)
+   * @param sendAt - Optional specific time to send (for scheduled send feature)
+   */
+  async scheduleEmail(emailData: {
+    to: Array<{ email: string; name?: string }>;
+    cc?: Array<{ email: string; name?: string }>;
+    bcc?: Array<{ email: string; name?: string }>;
+    subject: string;
+    text?: string;
+    html?: string;
+    inReplyTo?: string;
+    emailAccountId: string;
+  }, undoDelay: number = 10, sendAt?: Date): Promise<ScheduledEmailResponse> {
+    const response = await this.api.post<any>('/api/emails/schedule', {
+      ...emailData,
+      undoDelay,
+      sendAt: sendAt?.toISOString()
+    })
+    return {
+      scheduledEmailId: response.data.scheduledEmailId,
+      scheduledFor: response.data.scheduledFor,
+      canUndoUntil: response.data.canUndoUntil,
+      message: response.data.message
+    }
+  }
+
+  /**
+   * Cancel a scheduled email (undo send)
+   */
+  async cancelScheduledEmail(id: string): Promise<void> {
+    await this.api.delete(`/api/emails/scheduled/${id}`)
+  }
+
+  /**
+   * Get all pending scheduled emails
+   */
+  async getScheduledEmails(): Promise<ScheduledEmail[]> {
+    const response = await this.api.get<any>('/api/emails/scheduled')
+    return (response.data.scheduledEmails || []).map((email: any) => ({
+      id: email.id,
+      emailAccountId: email.emailAccountId,
+      to: email.to,
+      subject: email.subject,
+      scheduledFor: email.scheduledFor,
+      status: email.status,
+      createdAt: email.createdAt
+    }))
+  }
 }
 
 // Contact type
@@ -797,6 +1028,24 @@ export interface SenderMetrics {
   isUnsubscribed: boolean
   lastEmailAt: string | null
   lastOpenedAt: string | null
+}
+
+// Scheduled Email Types (for Undo Send / Send Later)
+export interface ScheduledEmailResponse {
+  scheduledEmailId: string
+  scheduledFor: string
+  canUndoUntil: string
+  message: string
+}
+
+export interface ScheduledEmail {
+  id: string
+  emailAccountId: string
+  to: Array<{ email: string; name?: string }>
+  subject: string
+  scheduledFor: string
+  status: 'pending' | 'sent' | 'cancelled' | 'failed'
+  createdAt: string
 }
 
 export const apiService = new ApiService()

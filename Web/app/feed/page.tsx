@@ -2,24 +2,27 @@
 
 import { useEffect, useState, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import Link from "next/link";
 import Image from "next/image";
 import { Search, List, Rows, X, SlidersHorizontal, ChevronDown, Minus } from "lucide-react";
 import UndoToast, { useUndoToast } from "@/components/UndoToast";
 import UnsubscribeNotification from "@/components/UnsubscribeNotification";
 import SyncStatusIndicator from "@/components/SyncStatusIndicator";
 import { useAuthStore, useEmailStore } from "@/lib/store";
+import { apiService } from "@/lib/api";
 import EmailList from "@/components/EmailList";
 import EmailDetail from "@/components/EmailDetail";
 import EmailFilters from "@/components/EmailFilters";
 import EmailSidebar from "@/components/EmailSidebar";
+import RightSidebar from "@/components/RightSidebar";
 import { SendEmailData } from "@/components/EmailCompose";
 import GmailCompose from "@/components/GmailCompose";
 import AdvancedSearchModal from "@/components/AdvancedSearchModal";
+import SendUndoToast, { useSendUndoToast } from "@/components/SendUndoToast";
 import { useEmailPolling } from "@/hooks/useEmailPolling";
 import { useGmailPush } from "@/hooks/useGmailPush";
 import { useNotifications } from "@/hooks/useNotifications";
 import { useEmailTracking, trackHtmlCardLinkClick } from "@/hooks/useEmailTracking";
+import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 
 export default function FeedPage() {
   const router = useRouter();
@@ -64,6 +67,13 @@ export default function FeedPage() {
 
   // Undo toast for delete/archive/snooze actions
   const { currentAction, showToast, dismissToast } = useUndoToast();
+  // Undo toast for email send
+  const { toastData: sendUndoData, showUndoToast: showSendUndoToast, hideToast: hideSendUndoToast } = useSendUndoToast();
+
+  // Search input ref for keyboard shortcuts
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const [isSearchFocused, setIsSearchFocused] = useState(false);
+  const [showReplyBox, setShowReplyBox] = useState(false);
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
   const [emailAccounts, setEmailAccounts] = useState<{ id: string; email: string }[]>([]);
   const [emailListWidth, setEmailListWidth] = useState(35); // percentage
@@ -75,6 +85,12 @@ export default function FeedPage() {
   const [showAdvancedSearch, setShowAdvancedSearch] = useState(false);
   const [advancedSearchFilters, setAdvancedSearchFilters] = useState<any>(null);
   const [showViewModeDropdown, setShowViewModeDropdown] = useState(false);
+  const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(false);
+  const [rightSidebarTab, setRightSidebarTab] = useState<'calendar' | 'your_life' | 'reminders'>('your_life');
+
+  // Full-screen email view (for calendar/action clicks)
+  const [fullScreenEmail, setFullScreenEmail] = useState<typeof selectedEmail>(null);
+  const [isLoadingFullScreenEmail, setIsLoadingFullScreenEmail] = useState(false);
 
   // Fetch email accounts on mount to enable compose
   useEffect(() => {
@@ -186,6 +202,97 @@ export default function FeedPage() {
     resetPushCount();
   };
 
+  // Keyboard shortcuts
+  useKeyboardShortcuts({
+    // Navigation - j/k for next/prev email
+    onNextEmail: () => {
+      if (emails.length === 0) return;
+      const currentIndex = selectedEmail
+        ? emails.findIndex(e => e.id === selectedEmail.id)
+        : -1;
+      const nextIndex = currentIndex + 1;
+      if (nextIndex < emails.length) {
+        selectEmail(emails[nextIndex]);
+      }
+    },
+    onPrevEmail: () => {
+      if (emails.length === 0) return;
+      const currentIndex = selectedEmail
+        ? emails.findIndex(e => e.id === selectedEmail.id)
+        : emails.length;
+      const prevIndex = currentIndex - 1;
+      if (prevIndex >= 0) {
+        selectEmail(emails[prevIndex]);
+      }
+    },
+    onOpenEmail: () => {
+      // If no email selected, select the first one
+      if (!selectedEmail && emails.length > 0) {
+        selectEmail(emails[0]);
+      }
+    },
+    onCloseEmail: () => {
+      if (selectedEmail) {
+        selectEmail(null);
+      }
+    },
+    // Actions
+    onArchive: () => {
+      if (selectedEmail) {
+        handleArchiveEmail(selectedEmail.id);
+        // Move to next email after archive
+        const currentIndex = emails.findIndex(e => e.id === selectedEmail.id);
+        if (currentIndex < emails.length - 1) {
+          selectEmail(emails[currentIndex + 1]);
+        } else if (currentIndex > 0) {
+          selectEmail(emails[currentIndex - 1]);
+        } else {
+          selectEmail(null);
+        }
+      }
+    },
+    onDelete: () => {
+      if (selectedEmail) {
+        handleSoftDeleteEmails([selectedEmail.id]);
+        selectEmail(null);
+      }
+    },
+    onReply: () => {
+      if (selectedEmail) {
+        setShowReplyBox(true);
+      }
+    },
+    onToggleStar: () => {
+      if (selectedEmail) {
+        toggleStar(selectedEmail.id);
+      }
+    },
+    onMarkRead: () => {
+      if (selectedEmail && !selectedEmail.isRead) {
+        markAsRead(selectedEmail.id, true);
+      }
+    },
+    onMarkUnread: () => {
+      if (selectedEmail && selectedEmail.isRead) {
+        markAsRead(selectedEmail.id, false);
+      }
+    },
+    // Global actions
+    onCompose: () => {
+      setShowComposeModal(true);
+    },
+    onSearch: () => {
+      searchInputRef.current?.focus();
+    },
+    onRefresh: () => {
+      fetchEmails();
+    },
+    // State
+    hasSelectedEmail: !!selectedEmail,
+    isComposeOpen: showComposeModal,
+    isSearchFocused
+  });
+
   useEffect(() => {
     checkAuth();
   }, [checkAuth]);
@@ -197,6 +304,72 @@ export default function FeedPage() {
       fetchEmails();
     }
   }, [isAuthenticated, authLoading, router, fetchEmails]);
+
+  // Track which email ID we've already loaded to prevent re-fetches
+  const loadedEmailIdRef = useRef<string | null>(null);
+
+  // Handle emailId URL parameter for full-screen email view
+  useEffect(() => {
+    const emailId = searchParams.get('emailId');
+
+    if (!emailId) {
+      // No emailId in URL - clear the full screen view
+      setFullScreenEmail(null);
+      loadedEmailIdRef.current = null;
+      return;
+    }
+
+    if (!isAuthenticated) return;
+
+    // Skip if we already loaded this email
+    if (loadedEmailIdRef.current === emailId && fullScreenEmail?.id === emailId) {
+      return;
+    }
+
+    // Load the email for full-screen view
+    const loadEmail = async () => {
+      // First check if it's in current list (instant, no loading state)
+      const existingEmail = emails.find(e => e.id === emailId);
+      if (existingEmail) {
+        setFullScreenEmail(existingEmail);
+        loadedEmailIdRef.current = emailId;
+        return;
+      }
+
+      // Need to fetch from API
+      setIsLoadingFullScreenEmail(true);
+      try {
+        const fetchedEmail = await apiService.getEmailById(emailId);
+        setFullScreenEmail(fetchedEmail);
+        loadedEmailIdRef.current = emailId;
+      } catch (error) {
+        console.error('Failed to load email:', error);
+        router.replace('/feed', { scroll: false });
+      } finally {
+        setIsLoadingFullScreenEmail(false);
+      }
+    };
+    loadEmail();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, isAuthenticated]);
+
+  // Function to open email in full-screen mode (updates URL)
+  const openFullScreenEmail = (emailId: string) => {
+    // Check if email is already in list for instant display
+    const existingEmail = emails.find(e => e.id === emailId);
+    if (existingEmail) {
+      setFullScreenEmail(existingEmail);
+      loadedEmailIdRef.current = emailId;
+    }
+    router.push(`/feed?emailId=${emailId}`, { scroll: false });
+  };
+
+  // Function to close full-screen email view
+  const closeFullScreenEmail = () => {
+    setFullScreenEmail(null);
+    loadedEmailIdRef.current = null;
+    router.push('/feed', { scroll: false });
+  };
 
   // Sync URL params with folder state on mount (run once when authenticated)
   const hasInitializedFromUrl = useRef(false);
@@ -357,6 +530,8 @@ export default function FeedPage() {
     }
     // When accountId is null, don't add emailAccountId - shows all accounts
 
+    console.log('📁 handleFolderChange:', { folder, accountId, newFilters });
+
     if (folder === "sent") {
       newFilters.specialFolder = "sent";
     } else if (folder === "spam") {
@@ -381,6 +556,7 @@ export default function FeedPage() {
       newFilters.badgeName = "Shopping";
     }
 
+    console.log('📁 Final newFilters:', newFilters);
     // setFilters already calls fetchEmails internally
     setFilters(newFilters);
   };
@@ -656,7 +832,7 @@ export default function FeedPage() {
   }
 
   return (
-    <div className="h-screen flex flex-col bg-background overflow-x-hidden">
+    <div className="h-screen flex flex-col bg-background overflow-x-hidden select-none">
       {/* Header */}
       <header className="bg-card border-b border-border px-6 py-4">
         <div className="flex items-center justify-between">
@@ -670,10 +846,13 @@ export default function FeedPage() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
               </svg>
             </button>
-            <Link href="/feed" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
+            <div
+              onClick={() => router.push('/feed')}
+              className="flex items-center gap-3 hover:opacity-80 transition-opacity cursor-pointer"
+            >
               <Image src="/Nemi-logo.png" alt="NEMI Logo" width={32} height={32} className="rounded" priority />
-              <h1 className="text-2xl font-bold text-foreground">NEMI</h1>
-            </Link>
+              <span className="text-2xl font-bold text-foreground pointer-events-none">NEMI</span>
+            </div>
 
             {/* View Mode Dropdown */}
             <div className="relative">
@@ -719,10 +898,13 @@ export default function FeedPage() {
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                 <input
+                  ref={searchInputRef}
                   type="text"
-                  placeholder="Search emails..."
+                  placeholder="Search emails... (press / to focus)"
                   value={searchInput}
                   onChange={(e) => setSearchInput(e.target.value)}
+                  onFocus={() => setIsSearchFocused(true)}
+                  onBlur={() => setIsSearchFocused(false)}
                   className="w-full pl-10 pr-10 py-2 text-sm bg-muted border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all"
                 />
                 {(searchInput || advancedSearchFilters) && (
@@ -857,120 +1039,173 @@ export default function FeedPage() {
           />
         )}
 
-        {/* Email list section - single bordered container like Gmail */}
-        <div
-          className="bg-card border border-border rounded-lg m-2 flex flex-col overflow-hidden shadow-sm"
-          style={{
-            width: selectedEmail ? `${emailListWidth}%` : "100%",
-            minWidth: selectedEmail ? "350px" : undefined,
-          }}
-        >
-          {/* Email Filters inside the container */}
-          <div className="border-b border-border">
-            <EmailFilters emails={emails} activeBadge={activeBadge} onBadgeChange={handleBadgeChange} totalEmailCount={totalEmails} refreshKey={refreshKey} emailAccountId={selectedAccountId} />
-          </div>
-          {/* Email list */}
-          <div className="flex-1 overflow-y-auto overflow-x-hidden">
-            {emailsLoading ? (
+        {/* Full-screen email view (when opened from calendar/actions) */}
+        {fullScreenEmail ? (
+          <div className="flex-1 bg-card border border-border rounded-lg m-2 flex flex-col overflow-hidden shadow-sm">
+            {isLoadingFullScreenEmail ? (
               <div className="flex items-center justify-center h-full">
                 <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary"></div>
               </div>
             ) : (
-              <EmailList
-                emails={filteredEmails}
-                selectedEmailId={selectedEmail?.id || null}
-                onSelectEmail={selectEmail}
+              <EmailDetail
+                email={fullScreenEmail}
+                onClose={closeFullScreenEmail}
+                onDelete={(id) => {
+                  deleteEmail(id);
+                  closeFullScreenEmail();
+                }}
                 onToggleStar={toggleStar}
-                onDeleteEmails={handleSoftDeleteEmails}
-                onArchiveEmail={handleArchiveEmail}
-                onUnarchiveEmail={handleUnarchiveEmail}
-                onSnoozeEmail={handleSnoozeEmail}
-                onUnsnoozeEmail={handleUnsnoozeEmail}
-                onHtmlCardLinkClick={trackHtmlCardLinkClick}
-                viewMode={viewMode}
-                isArchivedView={filters.specialFolder === 'archived'}
+                onMarkAsRead={markAsRead}
+                onSendEmail={handleSendEmail}
+                onLinkClick={trackLinkClick}
+                onSnooze={async (id, date) => {
+                  await handleSnoozeEmail(id, date);
+                  closeFullScreenEmail();
+                }}
+                onUnsnooze={handleUnsnoozeEmail}
+                onArchive={async (id) => {
+                  await handleArchiveEmail(id);
+                  closeFullScreenEmail();
+                }}
+                onUnarchive={handleUnarchiveEmail}
               />
             )}
           </div>
-
-          {/* Pagination Controls */}
-          {totalPages > 1 && (
-            <div className="border-t border-border bg-card px-4 py-3">
-              <div className="flex items-center justify-between">
-                <button
-                  onClick={() => setPage(page - 1)}
-                  disabled={page === 1}
-                  className="flex items-center gap-2 px-3 py-1.5 text-sm text-foreground hover:bg-accent rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                  </svg>
-                  Previous
-                </button>
-
-                <div className="flex items-center gap-2">
-                  {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                    let pageNum;
-                    if (totalPages <= 5) {
-                      pageNum = i + 1;
-                    } else if (page <= 3) {
-                      pageNum = i + 1;
-                    } else if (page >= totalPages - 2) {
-                      pageNum = totalPages - 4 + i;
-                    } else {
-                      pageNum = page - 2 + i;
-                    }
-
-                    return (
-                      <button
-                        key={pageNum}
-                        onClick={() => setPage(pageNum)}
-                        className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
-                          page === pageNum ? "bg-primary text-primary-foreground" : "text-foreground hover:bg-accent"
-                        }`}
-                      >
-                        {pageNum}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                <button
-                  onClick={() => setPage(page + 1)}
-                  disabled={page === totalPages}
-                  className="flex items-center gap-2 px-3 py-1.5 text-sm text-foreground hover:bg-accent rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Next
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                  </svg>
-                </button>
+        ) : (
+          <>
+            {/* Email list section - single bordered container like Gmail */}
+            <div
+              className="bg-card border border-border rounded-lg m-2 flex flex-col overflow-hidden shadow-sm"
+              style={{
+                width: selectedEmail ? `${emailListWidth}%` : "100%",
+                minWidth: selectedEmail ? "350px" : undefined,
+              }}
+            >
+              {/* Email Filters inside the container */}
+              <div className="border-b border-border">
+                <EmailFilters emails={emails} activeBadge={activeBadge} onBadgeChange={handleBadgeChange} totalEmailCount={totalEmails} refreshKey={refreshKey} emailAccountId={selectedAccountId} />
               </div>
+              {/* Email list */}
+              <div className="flex-1 overflow-y-auto overflow-x-hidden">
+                {emailsLoading ? (
+                  <div className="flex items-center justify-center h-full">
+                    <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary"></div>
+                  </div>
+                ) : (
+                  <EmailList
+                    emails={filteredEmails}
+                    selectedEmailId={selectedEmail?.id || null}
+                    onSelectEmail={selectEmail}
+                    onToggleStar={toggleStar}
+                    onDeleteEmails={handleSoftDeleteEmails}
+                    onArchiveEmail={handleArchiveEmail}
+                    onUnarchiveEmail={handleUnarchiveEmail}
+                    onSnoozeEmail={handleSnoozeEmail}
+                    onUnsnoozeEmail={handleUnsnoozeEmail}
+                    onHtmlCardLinkClick={trackHtmlCardLinkClick}
+                    viewMode={viewMode}
+                    isArchivedView={filters.specialFolder === 'archived'}
+                  />
+                )}
+              </div>
+
+              {/* Pagination Controls */}
+              {totalPages > 1 && (
+                <div className="border-t border-border bg-card px-4 py-3">
+                  <div className="flex items-center justify-between">
+                    <button
+                      onClick={() => setPage(page - 1)}
+                      disabled={page === 1}
+                      className="flex items-center gap-2 px-3 py-1.5 text-sm text-foreground hover:bg-accent rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                      </svg>
+                      Previous
+                    </button>
+
+                    <div className="flex items-center gap-2">
+                      {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                        let pageNum;
+                        if (totalPages <= 5) {
+                          pageNum = i + 1;
+                        } else if (page <= 3) {
+                          pageNum = i + 1;
+                        } else if (page >= totalPages - 2) {
+                          pageNum = totalPages - 4 + i;
+                        } else {
+                          pageNum = page - 2 + i;
+                        }
+
+                        return (
+                          <button
+                            key={pageNum}
+                            onClick={() => setPage(pageNum)}
+                            className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+                              page === pageNum ? "bg-primary text-primary-foreground" : "text-foreground hover:bg-accent"
+                            }`}
+                          >
+                            {pageNum}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <button
+                      onClick={() => setPage(page + 1)}
+                      disabled={page === totalPages}
+                      className="flex items-center gap-2 px-3 py-1.5 text-sm text-foreground hover:bg-accent rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Next
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
-          )}
-        </div>
 
-        {/* Resizer */}
-        {selectedEmail && <div className="w-1 hover:bg-primary cursor-col-resize transition-colors" onMouseDown={handleMouseDown} />}
+            {/* Resizer */}
+            {selectedEmail && <div className="w-1 hover:bg-primary cursor-col-resize transition-colors" onMouseDown={handleMouseDown} />}
 
-        {/* Email detail */}
-        {selectedEmail && (
-          <div className="flex-1 overflow-hidden bg-card border border-border rounded-lg m-2 ml-0 shadow-sm">
-            <EmailDetail
-              email={selectedEmail}
-              onClose={() => selectEmail(null)}
-              onDelete={deleteEmail}
-              onToggleStar={toggleStar}
-              onMarkAsRead={markAsRead}
-              onSendEmail={handleSendEmail}
-              onLinkClick={trackLinkClick}
-              onSnooze={handleSnoozeEmail}
-              onUnsnooze={handleUnsnoozeEmail}
-              onArchive={handleArchiveEmail}
-              onUnarchive={handleUnarchiveEmail}
-            />
-          </div>
+            {/* Email detail */}
+            {selectedEmail && (
+              <div className="flex-1 overflow-hidden bg-card border border-border rounded-lg m-2 ml-0 shadow-sm">
+                <EmailDetail
+                  email={selectedEmail}
+                  threadEmails={
+                    // Get all emails in the same thread, sorted by date (newest first)
+                    selectedEmail.threadId
+                      ? emails
+                          .filter(e => e.threadId === selectedEmail.threadId)
+                          .sort((a, b) => new Date(b.date || b.createdAt).getTime() - new Date(a.date || a.createdAt).getTime())
+                      : undefined
+                  }
+                  onClose={() => selectEmail(null)}
+                  onDelete={deleteEmail}
+                  onToggleStar={toggleStar}
+                  onMarkAsRead={markAsRead}
+                  onSendEmail={handleSendEmail}
+                  onLinkClick={trackLinkClick}
+                  onSnooze={handleSnoozeEmail}
+                  onUnsnooze={handleUnsnoozeEmail}
+                  onArchive={handleArchiveEmail}
+                  onUnarchive={handleUnarchiveEmail}
+                />
+              </div>
+            )}
+          </>
         )}
+
+        {/* Right Sidebar - Calendar/Your Life/Reminders */}
+        <RightSidebar
+          isOpen={isRightSidebarOpen}
+          onToggle={() => setIsRightSidebarOpen(!isRightSidebarOpen)}
+          activeTab={rightSidebarTab}
+          onTabChange={setRightSidebarTab}
+          onEmailClick={openFullScreenEmail}
+        />
       </div>
 
       {/* Undo Toast for delete/archive/snooze actions */}
@@ -991,6 +1226,26 @@ export default function FeedPage() {
               emailAccountId: emailData.emailAccountId,
             });
           }}
+          onScheduledSend={(scheduledEmailId, subject, to) => {
+            showSendUndoToast({ scheduledEmailId, subject, to });
+          }}
+        />
+      )}
+
+      {/* Send Undo Toast - for undo send feature */}
+      {sendUndoData && (
+        <SendUndoToast
+          scheduledEmailId={sendUndoData.scheduledEmailId}
+          subject={sendUndoData.subject}
+          to={sendUndoData.to}
+          undoDelay={sendUndoData.undoDelay}
+          onUndo={() => {
+            console.log('Email send cancelled');
+          }}
+          onSent={() => {
+            console.log('Email sent successfully');
+          }}
+          onDismiss={hideSendUndoToast}
         />
       )}
 
