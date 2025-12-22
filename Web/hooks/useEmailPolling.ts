@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { useNotifications } from './useNotifications'
 
 interface Email {
   id: string
@@ -17,29 +16,6 @@ interface UseEmailPollingOptions {
   onNewEmails?: (emails: Email[]) => void
 }
 
-// Play notification sound
-const playNotificationSound = () => {
-  try {
-    // Create a simple notification beep using Web Audio API
-    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
-    const oscillator = audioContext.createOscillator()
-    const gainNode = audioContext.createGain()
-
-    oscillator.connect(gainNode)
-    gainNode.connect(audioContext.destination)
-
-    oscillator.frequency.value = 880 // A5 note
-    oscillator.type = 'sine'
-    gainNode.gain.setValueAtTime(0.3, audioContext.currentTime)
-    gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.3)
-
-    oscillator.start(audioContext.currentTime)
-    oscillator.stop(audioContext.currentTime + 0.3)
-  } catch (error) {
-    console.log('Could not play notification sound:', error)
-  }
-}
-
 export function useEmailPolling(options: UseEmailPollingOptions = {}) {
   const {
     enabled = true,
@@ -51,7 +27,6 @@ export function useEmailPolling(options: UseEmailPollingOptions = {}) {
   const [newEmailCount, setNewEmailCount] = useState(0)
   const [isPolling, setIsPolling] = useState(false)
   const intervalRef = useRef<NodeJS.Timeout | null>(null)
-  const { showNotification, isEnabled: notificationsEnabled } = useNotifications()
 
   const checkForNewEmails = useCallback(async () => {
     if (!enabled || isPolling) return
@@ -98,26 +73,13 @@ export function useEmailPolling(options: UseEmailPollingOptions = {}) {
         : []
 
       if (newEmails.length > 0) {
-        console.log(`Found ${newEmails.length} new email(s)`)
+        console.log(`Found ${newEmails.length} new email(s) via polling`)
         setNewEmailCount(prev => prev + newEmails.length)
 
-        // Play notification sound
-        playNotificationSound()
+        // Note: Sound is NOT played here - only WebSocket push notifications play sounds
+        // This prevents duplicate sounds and sounds for re-analyzed emails
 
-        // Show notifications for new emails
-        if (notificationsEnabled) {
-          newEmails.forEach((email: Email) => {
-            showNotification({
-              id: email.id,
-              subject: email.subject,
-              from: email.from,
-              preview: email.preview,
-              badges: email.badges
-            })
-          })
-        }
-
-        // Callback
+        // Callback (let the caller decide what to do)
         if (onNewEmails) {
           onNewEmails(newEmails)
         }
@@ -129,7 +91,7 @@ export function useEmailPolling(options: UseEmailPollingOptions = {}) {
     } finally {
       setIsPolling(false)
     }
-  }, [enabled, isPolling, lastChecked, notificationsEnabled, showNotification, onNewEmails])
+  }, [enabled, isPolling, lastChecked, onNewEmails])
 
   const resetCount = useCallback(() => {
     setNewEmailCount(0)

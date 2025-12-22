@@ -279,6 +279,8 @@ class ApiService {
         isPersonallyRelevant: email.is_personally_relevant !== undefined ? email.is_personally_relevant : email.isPersonallyRelevant,
         isAboutMe: email.is_about_me !== undefined ? email.is_about_me : email.isAboutMe,
         mentionContext: email.mention_context || email.mentionContext,
+        // Sender profile photo
+        senderProfilePhotoUrl: email.sender_profile_photo_url || email.senderProfilePhotoUrl,
         // Unsubscribe
         unsubscribeUrl: email.unsubscribe_url || email.unsubscribeUrl,
         unsubscribeEmail: email.unsubscribe_email || email.unsubscribeEmail,

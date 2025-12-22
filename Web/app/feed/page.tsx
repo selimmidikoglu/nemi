@@ -54,6 +54,19 @@ export default function FeedPage() {
     refreshKey,
   } = useEmailStore();
 
+  // Sync viewMode from localStorage after hydration to prevent SSR mismatch
+  // This runs once on mount to ensure localStorage value is used
+  useEffect(() => {
+    const savedViewMode = localStorage.getItem('emailViewMode');
+    if (savedViewMode && (savedViewMode === 'compact' || savedViewMode === 'detailed' || savedViewMode === 'minimal')) {
+      if (savedViewMode !== viewMode) {
+        console.log('Syncing viewMode from localStorage:', savedViewMode, '(was:', viewMode, ')');
+        setViewMode(savedViewMode as 'compact' | 'detailed' | 'minimal');
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Intentionally empty - only run on mount
+
   const [activeBadge, setActiveBadge] = useState<string | null>(null);
   const [activeFolder, setActiveFolder] = useState<string>(() => {
     // Initialize from URL params

@@ -929,24 +929,49 @@ Only generate when is_answerable = true. Create 3 DIFFERENT APPROACHES (not tone
 
 # EXTRACTED_ACTIONS GUIDELINES:
 
-Extract ALL actionable items from emails. This helps users track deadlines and tasks.
+**CRITICAL: Extract ALL actionable items from emails - formal AND informal.** This is one of the most important features. Users rely on this to track their tasks, reminders, and deadlines. When in doubt, EXTRACT IT.
 
 **type: "deadline"** - Hard deadline with specific date
 - Payment due dates
 - Submission deadlines
-- Event dates
+- Event dates, meetings, appointments
 - Expiration dates
+- Flight times, hotel check-ins
+- Any time-specific commitment
 
 **type: "reminder"** - Soft task without specific date
 - PR reviews requested
 - "Check this out when you have time"
 - Follow-up items
 - Things to remember
+- **PERSONAL REMINDERS** (VERY IMPORTANT - see below)
 
 **type: "task"** - Something user needs to do
 - Action items from meetings
 - Requests to complete something
 - Items assigned to user
+- Errands, chores, to-dos
+
+**PERSONAL/INFORMAL REMINDERS - MUST EXTRACT:**
+This is CRITICAL. Personal emails often contain important reminders that MUST be extracted:
+- "Don't forget to buy bread" → Extract as reminder: "Buy bread"
+- "Ekmek almayı unutma" → Extract as reminder: "Ekmek al"
+- "Remember to call mom" → Extract as reminder: "Call mom"
+- "Pick up the kids at 5" → Extract as deadline: "Pick up kids" with time
+- "Can you grab milk on the way home?" → Extract as reminder: "Get milk"
+- "Don't forget our anniversary is Friday" → Extract as deadline with date
+- "Reminder: dentist appointment tomorrow" → Extract as deadline
+- ANY request or reminder from family/friends → EXTRACT IT
+
+**Informal Language Triggers** (extract when you see these):
+- "don't forget", "unutma", "hatırla", "remember"
+- "can you", "could you", "yapabilir misin"
+- "please", "lütfen"
+- "need to", "have to", "must", "lazım", "gerek"
+- "pick up", "get", "buy", "al", "getir"
+- "call", "ara", "message", "text"
+- "meet", "buluş", "see you"
+- Any imperative/command form
 
 **calendar_type determination:**
 - "your_life" → Goes to Your Life calendar (hard deadlines with dates)
@@ -1000,6 +1025,34 @@ Email: "Sprint planning on Monday 10am. Please prepare your updates."
     "priority": "medium",
     "source_text": "Please prepare your updates",
     "calendar_type": "reminder"
+  }
+]
+```
+
+Email: "Selim eve gelirken sakın ekmek almayı unutma, tamam mı?" (Personal reminder in Turkish)
+```json
+"extracted_actions": [
+  {
+    "type": "reminder",
+    "title": "Ekmek al",
+    "date": null,
+    "priority": "medium",
+    "source_text": "ekmek almayı unutma",
+    "calendar_type": "reminder"
+  }
+]
+```
+
+Email: "Hey, don't forget to pick up the dry cleaning tomorrow before 6pm!"
+```json
+"extracted_actions": [
+  {
+    "type": "deadline",
+    "title": "Pick up dry cleaning",
+    "date": "2024-12-24T18:00:00Z",
+    "priority": "medium",
+    "source_text": "pick up the dry cleaning tomorrow before 6pm",
+    "calendar_type": "your_life"
   }
 ]
 ```

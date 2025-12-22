@@ -321,4 +321,10 @@ router.get('/scheduled', emailController.getScheduledEmails);
  */
 router.delete('/scheduled/:id', emailController.cancelScheduledEmail);
 
+/**
+ * POST /api/emails/:id/reanalyze
+ * Re-analyze an email with AI (extract actions, update metadata)
+ */
+router.post('/:id/reanalyze', emailController.reanalyzeEmail);
+
 export default router;

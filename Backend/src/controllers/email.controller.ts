@@ -3,9 +3,10 @@ import { EmailService } from '../services/email.service';
 import { AIService } from '../services/ai.service';
 import { SmtpService } from '../services/smtp.service';
 import { ReplyAutocomplete } from '../../../AI/services/replyAutocomplete';
+import { DeepEmailAnalyzerService } from '../services/deep-email-analyzer.service';
 import { logger } from '../config/logger';
 import { AuthRequest } from '../middleware/auth';
-import { query as dbQuery } from '../config/database';
+import { query as dbQuery, pool } from '../config/database';
 import { decrypt } from '../utils/encryption';
 
 /**
@@ -992,6 +993,76 @@ export class EmailController {
       res.json({ emails });
     } catch (error) {
       logger.error('Get deleted emails error:', error);
+      next(error);
+    }
+  };
+
+  /**
+   * Re-analyze an email with AI (extract actions, update metadata)
+   */
+  reanalyzeEmail = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const userId = req.userId!;
+      const { id } = req.params;
+
+      logger.info(`Re-analyzing email ${id} for user ${userId}`);
+
+      // Get email from database
+      const emailResult = await dbQuery(
+        'SELECT * FROM emails WHERE id = $1 AND user_id = $2',
+        [id, userId]
+      );
+
+      if (emailResult.rows.length === 0) {
+        res.status(404).json({ error: 'Email not found' });
+        return;
+      }
+
+      const email = emailResult.rows[0];
+
+      // Create analyzer instance
+      const analyzer = new DeepEmailAnalyzerService(pool);
+
+      // Build email for analysis
+      const emailForAnalysis = {
+        id: email.id,
+        user_id: userId,
+        from_email: email.from_email,
+        from_name: email.from_name,
+        to_emails: typeof email.to_emails === 'string' ? JSON.parse(email.to_emails) : email.to_emails,
+        cc_emails: typeof email.cc_emails === 'string' ? JSON.parse(email.cc_emails) : email.cc_emails,
+        subject: email.subject,
+        body: email.body || '',
+        date: email.date
+      };
+
+      // Re-analyze
+      const analysis = await analyzer.analyzeEmail(emailForAnalysis, userId);
+
+      if (!analysis) {
+        res.status(500).json({ error: 'AI analysis failed' });
+        return;
+      }
+
+      // Get any new actions that were extracted
+      const actionsResult = await dbQuery(
+        'SELECT * FROM email_actions WHERE email_id = $1 ORDER BY created_at DESC',
+        [id]
+      );
+
+      res.json({
+        success: true,
+        message: 'Email re-analyzed successfully',
+        analysis: {
+          summary: analysis.summary,
+          badges: analysis.badges,
+          scores: analysis.scores,
+          extractedActions: actionsResult.rows,
+          metadata: analysis.metadata
+        }
+      });
+    } catch (error) {
+      logger.error('Re-analyze email error:', error);
       next(error);
     }
   };

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { ChevronDown, ChevronRight, Inbox, Send, AlertOctagon, Mail, Plus, Bot, Megaphone, Newspaper, ShoppingCart, Archive, Clock, Trash2, Star, Edit3, BarChart3, Tags, MailX } from "lucide-react";
+import { ChevronDown, ChevronRight, Inbox, Send, AlertOctagon, Mail, Plus, Bot, Megaphone, Newspaper, ShoppingCart, Archive, Clock, Trash2, Star, Edit3, BarChart3, Tags, MailX, Layers } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useRouter } from "next/navigation";
 
@@ -35,6 +35,7 @@ export default function EmailSidebar({ activeFolder, onFolderChange, onCompose, 
   const router = useRouter();
   const [emailAccounts, setEmailAccounts] = useState<EmailAccount[]>([]);
   const [expandedAccounts, setExpandedAccounts] = useState<Set<string | 'all'>>(new Set(['all']));
+  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
   const [isLoading, setIsLoading] = useState(true);
   const [categoryCounts, setCategoryCounts] = useState<Record<string, number>>({});
   const [allEmailsCategoryCounts, setAllEmailsCategoryCounts] = useState<Record<string, number>>({});
@@ -216,6 +217,16 @@ export default function EmailSidebar({ activeFolder, onFolderChange, onCompose, 
     setExpandedAccounts(newExpanded);
   };
 
+  const toggleCategories = (key: string) => {
+    const newExpanded = new Set(expandedCategories);
+    if (newExpanded.has(key)) {
+      newExpanded.delete(key);
+    } else {
+      newExpanded.add(key);
+    }
+    setExpandedCategories(newExpanded);
+  };
+
   // Get category counts for a specific account or all emails
   const getCategoryCounts = (accountId: string | null): Record<string, number> => {
     if (accountId === null) {
@@ -369,34 +380,65 @@ export default function EmailSidebar({ activeFolder, onFolderChange, onCompose, 
                 );
               })}
 
-              {/* Separator */}
-              <div className="border-t border-border my-2" />
-
-              {/* Category folders for All Emails */}
-              {categoryFolders.map((folder) => {
-                const counts = getCategoryCounts(null);
-                const count = counts[folder.id] || 0;
-                return (
-                  <button
-                    key={`all-${folder.id}`}
-                    onClick={() => onFolderChange(folder.id, null)}
-                    className={cn(
-                      "w-full flex items-center gap-2.5 px-3 py-2 text-[13px] rounded-lg transition-colors",
-                      activeFolder === `all-${folder.id}` || (activeFolder === folder.id && selectedAccountId === null)
-                        ? "bg-primary/10 text-primary font-medium"
-                        : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
-                    )}
-                  >
-                    <span className="flex-shrink-0">{folder.icon}</span>
-                    <span className="flex-1 text-left">{folder.name}</span>
-                    {count > 0 && (
+              {/* Categories Dropdown */}
+              <div className="mt-1">
+                <button
+                  onClick={() => toggleCategories('all')}
+                  className={cn(
+                    "w-full flex items-center gap-2.5 px-3 py-2 text-[13px] rounded-lg transition-colors",
+                    expandedCategories.has('all')
+                      ? "bg-accent/50 text-foreground"
+                      : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+                  )}
+                >
+                  {expandedCategories.has('all') ? (
+                    <ChevronDown className="size-3.5 flex-shrink-0" />
+                  ) : (
+                    <ChevronRight className="size-3.5 flex-shrink-0" />
+                  )}
+                  <Layers className="size-[18px] flex-shrink-0" />
+                  <span className="flex-1 text-left">Categories</span>
+                  {(() => {
+                    const counts = getCategoryCounts(null);
+                    const totalCount = categoryFolders.reduce((sum, f) => sum + (counts[f.id] || 0), 0);
+                    return totalCount > 0 ? (
                       <span className="text-[11px] bg-muted px-2 py-0.5 rounded-full">
-                        {count}
+                        {totalCount}
                       </span>
-                    )}
-                  </button>
-                );
-              })}
+                    ) : null;
+                  })()}
+                </button>
+
+                {/* Category folders inside dropdown */}
+                {expandedCategories.has('all') && (
+                  <div className="ml-4 mt-1 space-y-0.5">
+                    {categoryFolders.map((folder) => {
+                      const counts = getCategoryCounts(null);
+                      const count = counts[folder.id] || 0;
+                      return (
+                        <button
+                          key={`all-${folder.id}`}
+                          onClick={() => onFolderChange(folder.id, null)}
+                          className={cn(
+                            "w-full flex items-center gap-2.5 px-3 py-1.5 text-[12px] rounded-lg transition-colors",
+                            activeFolder === `all-${folder.id}` || (activeFolder === folder.id && selectedAccountId === null)
+                              ? "bg-primary/10 text-primary font-medium"
+                              : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+                          )}
+                        >
+                          <span className="flex-shrink-0">{folder.icon}</span>
+                          <span className="flex-1 text-left">{folder.name}</span>
+                          {count > 0 && (
+                            <span className="text-[10px] bg-muted px-1.5 py-0.5 rounded-full">
+                              {count}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -465,34 +507,65 @@ export default function EmailSidebar({ activeFolder, onFolderChange, onCompose, 
                     );
                   })}
 
-                  {/* Separator */}
-                  <div className="border-t border-border my-2" />
-
-                  {/* Category folders (Automated, Promotional, Newsletter, Shopping) */}
-                  {categoryFolders.map((folder) => {
-                    const counts = getCategoryCounts(account.id);
-                    const count = counts[folder.id] || 0;
-                    return (
-                      <button
-                        key={`${account.id}-${folder.id}`}
-                        onClick={() => onFolderChange(folder.id, account.id)}
-                        className={cn(
-                          "w-full flex items-center gap-2.5 px-3 py-2 text-[13px] rounded-lg transition-colors",
-                          activeFolder === `${account.id}-${folder.id}`
-                            ? "bg-primary/10 text-primary font-medium"
-                            : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
-                        )}
-                      >
-                        <span className="flex-shrink-0">{folder.icon}</span>
-                        <span className="flex-1 text-left">{folder.name}</span>
-                        {count > 0 && (
+                  {/* Categories Dropdown */}
+                  <div className="mt-1">
+                    <button
+                      onClick={() => toggleCategories(account.id)}
+                      className={cn(
+                        "w-full flex items-center gap-2.5 px-3 py-2 text-[13px] rounded-lg transition-colors",
+                        expandedCategories.has(account.id)
+                          ? "bg-accent/50 text-foreground"
+                          : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+                      )}
+                    >
+                      {expandedCategories.has(account.id) ? (
+                        <ChevronDown className="size-3.5 flex-shrink-0" />
+                      ) : (
+                        <ChevronRight className="size-3.5 flex-shrink-0" />
+                      )}
+                      <Layers className="size-[18px] flex-shrink-0" />
+                      <span className="flex-1 text-left">Categories</span>
+                      {(() => {
+                        const counts = getCategoryCounts(account.id);
+                        const totalCount = categoryFolders.reduce((sum, f) => sum + (counts[f.id] || 0), 0);
+                        return totalCount > 0 ? (
                           <span className="text-[11px] bg-muted px-2 py-0.5 rounded-full">
-                            {count}
+                            {totalCount}
                           </span>
-                        )}
-                      </button>
-                    );
-                  })}
+                        ) : null;
+                      })()}
+                    </button>
+
+                    {/* Category folders inside dropdown */}
+                    {expandedCategories.has(account.id) && (
+                      <div className="ml-4 mt-1 space-y-0.5">
+                        {categoryFolders.map((folder) => {
+                          const counts = getCategoryCounts(account.id);
+                          const count = counts[folder.id] || 0;
+                          return (
+                            <button
+                              key={`${account.id}-${folder.id}`}
+                              onClick={() => onFolderChange(folder.id, account.id)}
+                              className={cn(
+                                "w-full flex items-center gap-2.5 px-3 py-1.5 text-[12px] rounded-lg transition-colors",
+                                activeFolder === `${account.id}-${folder.id}`
+                                  ? "bg-primary/10 text-primary font-medium"
+                                  : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+                              )}
+                            >
+                              <span className="flex-shrink-0">{folder.icon}</span>
+                              <span className="flex-1 text-left">{folder.name}</span>
+                              {count > 0 && (
+                                <span className="text-[10px] bg-muted px-1.5 py-0.5 rounded-full">
+                                  {count}
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>

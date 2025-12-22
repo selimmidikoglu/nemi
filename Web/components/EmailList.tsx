@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import type { Email } from "@/types";
 import Image from "next/image";
 import EmailHtmlCard from "./EmailHtmlCard";
-import { formatDistanceToNow, format, isToday, isYesterday, differenceInHours } from "date-fns";
+import { format } from "date-fns";
 import { useTheme } from "next-themes";
 
 interface EmailListProps {
@@ -236,29 +236,47 @@ const filterMeaningfulBadges = (badges: any[] | undefined, companyName?: string 
   });
 };
 
-// Helper to format email date (clean format without "about" or "ago")
+// Helper to format email date with relative time (4 min ago, 9 hours ago, etc.)
 const formatEmailDate = (dateString: string): string => {
   const date = new Date(dateString);
   const now = new Date();
-  const hoursAgo = differenceInHours(now, date);
+  const diffMs = now.getTime() - date.getTime();
+  const diffMinutes = Math.floor(diffMs / (1000 * 60));
+  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
 
-  // Today: show time
-  if (isToday(date)) {
-    return format(date, "h:mm a");
+  // Less than 1 minute ago
+  if (diffMinutes < 1) {
+    return "Just now";
   }
 
-  // Yesterday
-  if (isYesterday(date)) {
+  // Less than 60 minutes ago
+  if (diffMinutes < 60) {
+    return `${diffMinutes} min ago`;
+  }
+
+  // Less than 24 hours ago
+  if (diffHours < 24) {
+    return `${diffHours} ${diffHours === 1 ? 'hour' : 'hours'} ago`;
+  }
+
+  // Yesterday (1 day ago)
+  if (diffDays === 1) {
     return "Yesterday";
   }
 
-  // Less than 7 days ago: show day name
-  if (hoursAgo < 168) { // 7 days * 24 hours
-    return format(date, "EEE"); // Mon, Tue, etc.
+  // Less than 7 days ago
+  if (diffDays < 7) {
+    return `${diffDays} days ago`;
   }
 
-  // Older: show short date format
-  return format(date, "MMM d");
+  // Less than 30 days ago - show day name
+  if (diffDays < 30) {
+    return format(date, "EEE, MMM d"); // Mon, Dec 15
+  }
+
+  // Older: show date
+  return format(date, "MMM d, yyyy");
 };
 
 // Group emails into threads using Gmail's native threadId
@@ -917,11 +935,12 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
                             : "hover:bg-accent/50"
                         )}
                       >
-                        {/* Unread indicator dot */}
-                        <div className={cn(
-                          "w-1.5 h-1.5 rounded-full flex-shrink-0",
-                          mainEmail.isRead ? "bg-transparent" : "bg-blue-500"
-                        )} />
+                        {/* New badge indicator */}
+                        {!mainEmail.isRead && (
+                          <span className="flex-shrink-0 px-1.5 py-0.5 text-[10px] font-semibold bg-blue-500 text-white rounded">
+                            New
+                          </span>
+                        )}
 
                         {/* Star */}
                         <button
@@ -1092,12 +1111,6 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
                       : "hover:shadow-[inset_4px_0_0_0_hsl(var(--primary)),0_4px_6px_-1px_rgb(0_0_0_/0.1),0_2px_4px_-2px_rgb(0_0_0_/0.1)]"
                   )}
                 >
-                  {/* Read/Unread indicator dot - top left corner */}
-                  <div
-                    className={cn("absolute top-2 left-2 w-2 h-2 rounded-full", mainEmail.isRead ? "bg-green-500" : "bg-red-500")}
-                    title={mainEmail.isRead ? "Read" : "Unread"}
-                  />
-
                   {/* Sender Avatar (Profile Photo -> Company Logo -> Initials) */}
                   <div className="flex-shrink-0 ml-2">
                     <SenderAvatar
@@ -1141,11 +1154,19 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
 
                   {/* Sender - Fixed width, always show actual sender name */}
                   <div className="flex-shrink-0 w-32 min-w-0">
-                    <div
-                      className={cn("text-sm truncate", mainEmail.isRead ? "text-muted-foreground font-normal" : "text-foreground font-semibold")}
-                      title={fromText}
-                    >
-                      {fromText}
+                    <div className="flex items-center gap-1.5">
+                      <div
+                        className={cn("text-sm truncate", mainEmail.isRead ? "text-muted-foreground font-normal" : "text-foreground font-semibold")}
+                        title={fromText}
+                      >
+                        {fromText}
+                      </div>
+                      {/* New badge indicator */}
+                      {!mainEmail.isRead && (
+                        <span className="flex-shrink-0 px-1.5 py-0.5 text-[9px] font-semibold bg-blue-500 text-white rounded">
+                          New
+                        </span>
+                      )}
                     </div>
                     {/* @YOU badge right under sender */}
                     {mainEmail.isAboutMe && (
@@ -1294,12 +1315,6 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
                       : "hover:shadow-[inset_4px_0_0_0_hsl(var(--primary)),0_4px_6px_-1px_rgb(0_0_0_/0.1),0_2px_4px_-2px_rgb(0_0_0_/0.1)]"
                   )}
                 >
-                  {/* Read/Unread indicator dot - top left corner */}
-                  <div
-                    className={cn("absolute top-2 left-2 w-2 h-2 rounded-full", mainEmail.isRead ? "bg-green-500" : "bg-red-500")}
-                    title={mainEmail.isRead ? "Read" : "Unread"}
-                  />
-
                   {/* Star icon - bottom left corner of the row */}
                   <button
                     onClick={(e) => {
@@ -1344,8 +1359,14 @@ export default function EmailList({ emails, selectedEmailId, onSelectEmail, onTo
                     </button>
 
                     {/* Sender */}
-                    <div className="flex-1 min-w-0">
+                    <div className="flex-1 min-w-0 flex items-center gap-2">
                       <div className={cn("text-sm", mainEmail.isRead ? "text-muted-foreground font-normal" : "text-foreground font-semibold")}>{fromText}</div>
+                      {/* New badge indicator */}
+                      {!mainEmail.isRead && (
+                        <span className="flex-shrink-0 px-1.5 py-0.5 text-[9px] font-semibold bg-blue-500 text-white rounded">
+                          New
+                        </span>
+                      )}
                     </div>
 
                     {/* @YOU badge */}

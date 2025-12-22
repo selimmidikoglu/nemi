@@ -191,26 +191,28 @@ export function useGmailPush(options: UseGmailPushOptions = {}) {
             console.log(`Received ${count} new email notification(s) for ${emailAddress}`, emails)
             setNewEmailCount(prev => prev + count)
 
-            // Play notification sound
-            playNotificationSound()
+            // Only play sound for truly new emails (received within last 5 minutes)
+            // This prevents sounds for emails that were synced but analyzed later
+            const now = Date.now()
+            const fiveMinutesAgo = now - 5 * 60 * 1000
+            const recentEmails = emails.filter((email: PushedEmail) => {
+              const emailDate = new Date(email.date).getTime()
+              return emailDate > fiveMinutesAgo
+            })
 
-            // Show browser notification with actual email info if available
-            if (notificationsEnabledRef.current && emails.length > 0) {
-              const firstEmail = emails[0]
+            if (recentEmails.length > 0) {
+              playNotificationSound()
+            }
+
+            // Show browser notification only for recent emails
+            if (notificationsEnabledRef.current && recentEmails.length > 0) {
+              const firstEmail = recentEmails[0]
               showNotificationRef.current({
                 id: `push-${Date.now()}`,
-                subject: firstEmail.subject || `${count} new email${count > 1 ? 's' : ''} arrived`,
+                subject: firstEmail.subject || `${recentEmails.length} new email${recentEmails.length > 1 ? 's' : ''} arrived`,
                 from: firstEmail.fromName || firstEmail.fromEmail || emailAddress,
-                preview: firstEmail.summary || firstEmail.snippet || `You have ${count} new email${count > 1 ? 's' : ''} in your inbox`,
+                preview: firstEmail.summary || firstEmail.snippet || `You have ${recentEmails.length} new email${recentEmails.length > 1 ? 's' : ''} in your inbox`,
                 badges: firstEmail.badges?.map(b => b.name) || ['New']
-              })
-            } else if (notificationsEnabledRef.current) {
-              showNotificationRef.current({
-                id: `push-${Date.now()}`,
-                subject: `${count} new email${count > 1 ? 's' : ''} arrived`,
-                from: emailAddress,
-                preview: `You have ${count} new email${count > 1 ? 's' : ''} in your inbox`,
-                badges: ['New']
               })
             }
 

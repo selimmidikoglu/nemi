@@ -109,23 +109,14 @@ export class EngagementService {
       logger.info(`Saved view session ${session.sessionId}, duration: ${session.durationSeconds}s`);
 
       // Update sender engagement metrics asynchronously (after commit)
-      // Get the sender email from the email record
+      // Pass the email ID - the database function will look up the sender
       try {
-        const emailResult = await query(
-          `SELECT from_email FROM emails WHERE id = $1`,
-          [session.emailId]
+        await unsubscribeService.recordEmailOpen(
+          session.userId,
+          session.emailId,  // Pass email ID, not sender email
+          session.durationSeconds
         );
-
-        if (emailResult.rows.length > 0 && emailResult.rows[0].from_email) {
-          const senderEmail = emailResult.rows[0].from_email;
-          // Record the email open for sender metrics
-          await unsubscribeService.recordEmailOpen(
-            session.userId,
-            senderEmail,
-            session.durationSeconds
-          );
-          logger.debug(`Updated sender metrics for ${senderEmail}`);
-        }
+        logger.debug(`Updated sender metrics for email ${session.emailId}`);
       } catch (senderError) {
         // Don't fail the view session save if sender metrics update fails
         logger.error('Error updating sender metrics:', senderError);

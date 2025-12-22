@@ -363,6 +363,7 @@ export class EmailService {
         e.is_about_me, e.mention_context, e.html_snippet, e.render_as_html,
         e.is_answerable, e.response_urgency, e.suggested_replies, e.extracted_actions,
         eps.personalized_score,
+        sp.profile_photo_url as sender_profile_photo_url,
         COALESCE(
           json_agg(
             json_build_object(
@@ -382,8 +383,9 @@ export class EmailService {
        LEFT JOIN user_badge_definitions ubd ON ubd.user_id = e.user_id AND ubd.badge_name = b.badge_name
        LEFT JOIN email_scores s ON s.email_id = e.id
        LEFT JOIN email_personalized_scores eps ON eps.id = e.id
+       LEFT JOIN sender_profiles sp ON sp.email_address = e.from_email
        WHERE ${whereClause}
-       GROUP BY e.id, s.id, eps.personalized_score
+       GROUP BY e.id, s.id, eps.personalized_score, sp.profile_photo_url
        ORDER BY e.date DESC
        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
       [...params, limit, offset]
@@ -772,6 +774,7 @@ export class EmailService {
       companyName: row.company_name,
       companyDomain: row.company_domain,
       companyLogoUrl: row.company_logo_url,
+      senderProfilePhotoUrl: row.sender_profile_photo_url || null,
       // NEW: Enhanced AI features (camelCase for frontend)
       isAboutMe: row.is_about_me || false,
       mentionContext: row.mention_context || null,
@@ -946,11 +949,13 @@ export class EmailService {
    */
   async getSnoozedEmails(userId: string): Promise<any[]> {
     const result = await query(
-      `SELECT * FROM emails
-       WHERE user_id = $1
-         AND snoozed_until IS NOT NULL
-         AND snoozed_until > NOW()
-       ORDER BY snoozed_until ASC`,
+      `SELECT e.*, sp.profile_photo_url as sender_profile_photo_url
+       FROM emails e
+       LEFT JOIN sender_profiles sp ON sp.email_address = e.from_email
+       WHERE e.user_id = $1
+         AND e.snoozed_until IS NOT NULL
+         AND e.snoozed_until > NOW()
+       ORDER BY e.snoozed_until ASC`,
       [userId]
     );
     return result.rows.map(this.formatEmail);
@@ -996,9 +1001,11 @@ export class EmailService {
    */
   async getArchivedEmails(userId: string, limit: number = 50, offset: number = 0): Promise<any[]> {
     const result = await query(
-      `SELECT * FROM emails
-       WHERE user_id = $1 AND is_archived = TRUE
-       ORDER BY date DESC
+      `SELECT e.*, sp.profile_photo_url as sender_profile_photo_url
+       FROM emails e
+       LEFT JOIN sender_profiles sp ON sp.email_address = e.from_email
+       WHERE e.user_id = $1 AND e.is_archived = TRUE
+       ORDER BY e.date DESC
        LIMIT $2 OFFSET $3`,
       [userId, limit, offset]
     );
@@ -1067,9 +1074,11 @@ export class EmailService {
    */
   async getDeletedEmails(userId: string, limit: number = 50, offset: number = 0): Promise<any[]> {
     const result = await query(
-      `SELECT * FROM emails
-       WHERE user_id = $1 AND is_deleted = TRUE
-       ORDER BY deleted_at DESC
+      `SELECT e.*, sp.profile_photo_url as sender_profile_photo_url
+       FROM emails e
+       LEFT JOIN sender_profiles sp ON sp.email_address = e.from_email
+       WHERE e.user_id = $1 AND e.is_deleted = TRUE
+       ORDER BY e.deleted_at DESC
        LIMIT $2 OFFSET $3`,
       [userId, limit, offset]
     );

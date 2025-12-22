@@ -294,6 +294,18 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 }))
 
+// Helper to get the saved view mode from localStorage
+const getSavedViewMode = (): ViewMode => {
+  if (typeof window === 'undefined') return 'compact'
+  const saved = localStorage.getItem('emailViewMode')
+  if (saved === 'compact' || saved === 'detailed' || saved === 'minimal') {
+    return saved
+  }
+  // Set default to localStorage if not set
+  localStorage.setItem('emailViewMode', 'compact')
+  return 'compact' // Default to compact if not set or invalid
+}
+
 export const useEmailStore = create<EmailState>((set, get) => ({
   emails: [],
   selectedEmail: null,
@@ -303,7 +315,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   totalPages: 1,
   totalEmails: 0,
   allEmailsCount: 0,
-  viewMode: (typeof window !== 'undefined' && localStorage.getItem('emailViewMode') as ViewMode) || 'minimal',
+  viewMode: getSavedViewMode(),
   searchQuery: '',
   refreshKey: 0,
   searchBadgeStats: null,

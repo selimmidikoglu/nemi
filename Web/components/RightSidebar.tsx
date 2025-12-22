@@ -119,6 +119,58 @@ export default function RightSidebar({
     return { text: format(date, 'MMM d'), isOverdue: false, isUrgent: false }
   }
 
+  // Get priority color based on priority level and urgency
+  const getPriorityColor = (priority: string, isOverdue: boolean, isUrgent: boolean) => {
+    if (isOverdue) return { bg: 'bg-red-500/20', text: 'text-red-500 dark:text-red-400', border: 'border-red-500/30' }
+    if (isUrgent) return { bg: 'bg-amber-500/20', text: 'text-amber-500 dark:text-amber-400', border: 'border-amber-500/30' }
+
+    switch (priority) {
+      case 'high':
+        return { bg: 'bg-red-500/15', text: 'text-red-500 dark:text-red-400', border: 'border-red-500/20' }
+      case 'medium':
+        return { bg: 'bg-amber-500/15', text: 'text-amber-500 dark:text-amber-400', border: 'border-amber-500/20' }
+      case 'low':
+      default:
+        return { bg: 'bg-gray-500/15', text: 'text-gray-500 dark:text-gray-400', border: 'border-gray-500/20' }
+    }
+  }
+
+  // Filter and sort deadlines: remove items older than 3 days, sort by due date
+  const filteredDeadlines = deadlines
+    .filter(action => {
+      if (!action.dueDate) return true // Keep items without due date
+      const dueDate = new Date(action.dueDate)
+      const threeDaysAgo = addDays(new Date(), -3)
+      return dueDate >= threeDaysAgo // Hide if more than 3 days overdue
+    })
+    .sort((a, b) => {
+      // Items with no date go to the end
+      if (!a.dueDate && !b.dueDate) return 0
+      if (!a.dueDate) return 1
+      if (!b.dueDate) return -1
+
+      // Sort by date ascending (closest first)
+      const dateA = new Date(a.dueDate).getTime()
+      const dateB = new Date(b.dueDate).getTime()
+
+      // Overdue items first, then by date
+      const isOverdueA = isPast(new Date(a.dueDate)) && !isToday(new Date(a.dueDate))
+      const isOverdueB = isPast(new Date(b.dueDate)) && !isToday(new Date(b.dueDate))
+
+      if (isOverdueA && !isOverdueB) return -1
+      if (!isOverdueA && isOverdueB) return 1
+
+      return dateA - dateB
+    })
+
+  // Sort reminders by priority then by created date
+  const sortedReminders = [...reminders].sort((a, b) => {
+    const priorityOrder: Record<string, number> = { high: 0, medium: 1, low: 2 }
+    const priorityDiff = (priorityOrder[a.priority] ?? 2) - (priorityOrder[b.priority] ?? 2)
+    if (priorityDiff !== 0) return priorityDiff
+    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  })
+
   const formatEventTime = (dateStr: string): string => {
     const date = new Date(dateStr)
     return format(date, 'h:mm a')
@@ -555,7 +607,7 @@ export default function RightSidebar({
                   </div>
                 )}
 
-                {deadlines.length === 0 ? (
+                {filteredDeadlines.length === 0 ? (
                   <div className="text-center py-12">
                     <div className="w-14 h-14 mx-auto mb-3 rounded-2xl bg-gradient-to-br from-purple-500/20 to-purple-600/5 flex items-center justify-center">
                       <Target className="w-7 h-7 text-purple-500 dark:text-purple-400" />
@@ -565,44 +617,47 @@ export default function RightSidebar({
                   </div>
                 ) : (
                   <div className="space-y-2">
-                    {deadlines.map((action) => {
+                    {filteredDeadlines.map((action) => {
                       const { text: dateText, isOverdue, isUrgent } = formatDueDate(action.dueDate)
+                      const colors = getPriorityColor(action.priority, isOverdue, isUrgent)
                       return (
                         <div
                           key={action.id}
-                          className={`group p-3 rounded-xl border transition-all duration-200 hover:scale-[1.01] ${
-                            isOverdue
-                              ? 'bg-gradient-to-r from-red-500/10 to-transparent border-red-500/20 hover:border-red-500/30'
-                              : isUrgent
-                              ? 'bg-gradient-to-r from-amber-500/10 to-transparent border-amber-500/20 hover:border-amber-500/30'
-                              : 'bg-muted/30 border-border hover:border-border/80 hover:bg-muted/50'
-                          }`}
+                          className={`group p-3 rounded-xl border transition-all duration-200 hover:scale-[1.01] bg-gradient-to-r from-transparent ${colors.border} hover:${colors.border}`}
+                          style={{
+                            background: `linear-gradient(to right, ${
+                              isOverdue ? 'rgba(239,68,68,0.1)' :
+                              isUrgent ? 'rgba(245,158,11,0.1)' :
+                              action.priority === 'high' ? 'rgba(239,68,68,0.08)' :
+                              action.priority === 'medium' ? 'rgba(245,158,11,0.08)' :
+                              'rgba(107,114,128,0.08)'
+                            }, transparent)`
+                          }}
                         >
                           <div className="flex items-start gap-3">
-                            <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                              isOverdue ? 'bg-red-500/20' : isUrgent ? 'bg-amber-500/20' : 'bg-purple-500/20'
-                            }`}>
-                              <Target className={`w-4 h-4 ${
-                                isOverdue ? 'text-red-500 dark:text-red-400' : isUrgent ? 'text-amber-500 dark:text-amber-400' : 'text-purple-500 dark:text-purple-400'
-                              }`} />
+                            <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${colors.bg}`}>
+                              <Target className={`w-4 h-4 ${colors.text}`} />
                             </div>
                             <div className="flex-1 min-w-0">
                               <p className="text-sm font-medium text-foreground truncate">{action.title}</p>
                               {action.emailSubject && (
                                 <button
                                   onClick={() => handleEmailClick(action.emailId)}
-                                  className="text-[11px] text-muted-foreground hover:text-purple-500 dark:hover:text-purple-400 truncate block mt-0.5 transition-colors text-left"
+                                  className={`text-[11px] text-muted-foreground hover:${colors.text} truncate block mt-0.5 transition-colors text-left`}
                                 >
                                   {action.emailSubject}
                                 </button>
                               )}
                               <div className="flex items-center gap-2 mt-1.5">
-                                <span className={`text-[11px] font-medium flex items-center gap-1 ${
-                                  isOverdue ? 'text-red-500 dark:text-red-400' : isUrgent ? 'text-amber-500 dark:text-amber-400' : 'text-muted-foreground'
-                                }`}>
+                                <span className={`text-[11px] font-medium flex items-center gap-1 ${colors.text}`}>
                                   <Clock className="w-3 h-3" />
                                   {dateText}
                                 </span>
+                                {action.priority && (
+                                  <span className={`text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded ${colors.bg} ${colors.text}`}>
+                                    {action.priority}
+                                  </span>
+                                )}
                               </div>
                             </div>
                             <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -633,7 +688,7 @@ export default function RightSidebar({
             {/* Reminders Tab */}
             {activeTab === 'reminders' && (
               <div className="p-3">
-                {reminders.length === 0 ? (
+                {sortedReminders.length === 0 ? (
                   <div className="text-center py-12">
                     <div className="w-14 h-14 mx-auto mb-3 rounded-2xl bg-gradient-to-br from-amber-500/20 to-orange-600/5 flex items-center justify-center">
                       <Bell className="w-7 h-7 text-amber-500 dark:text-amber-400" />
@@ -643,50 +698,65 @@ export default function RightSidebar({
                   </div>
                 ) : (
                   <div className="space-y-2">
-                    {reminders.map((action) => (
-                      <div
-                        key={action.id}
-                        className="group p-3 rounded-xl bg-muted/30 border border-border hover:border-border/80 hover:bg-muted/50 transition-all duration-200 hover:scale-[1.01]"
-                      >
-                        <div className="flex items-start gap-3">
-                          <div className="w-8 h-8 rounded-lg bg-amber-500/20 flex items-center justify-center flex-shrink-0">
-                            <Bell className="w-4 h-4 text-amber-500 dark:text-amber-400" />
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm font-medium text-foreground truncate">{action.title}</p>
-                            {action.emailSubject && (
+                    {sortedReminders.map((action) => {
+                      const colors = getPriorityColor(action.priority, false, false)
+                      return (
+                        <div
+                          key={action.id}
+                          className={`group p-3 rounded-xl border transition-all duration-200 hover:scale-[1.01] ${colors.border}`}
+                          style={{
+                            background: `linear-gradient(to right, ${
+                              action.priority === 'high' ? 'rgba(239,68,68,0.08)' :
+                              action.priority === 'medium' ? 'rgba(245,158,11,0.08)' :
+                              'rgba(107,114,128,0.05)'
+                            }, transparent)`
+                          }}
+                        >
+                          <div className="flex items-start gap-3">
+                            <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${colors.bg}`}>
+                              <Bell className={`w-4 h-4 ${colors.text}`} />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium text-foreground truncate">{action.title}</p>
+                              {action.emailSubject && (
+                                <button
+                                  onClick={() => handleEmailClick(action.emailId)}
+                                  className={`text-[11px] text-muted-foreground hover:${colors.text} truncate block mt-0.5 transition-colors text-left`}
+                                >
+                                  {action.emailSubject}
+                                </button>
+                              )}
+                              <div className="flex items-center gap-2 mt-1.5">
+                                <span className="text-[11px] text-muted-foreground">
+                                  {formatDistanceToNow(new Date(action.createdAt), { addSuffix: true })}
+                                </span>
+                                {action.priority && (
+                                  <span className={`text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded ${colors.bg} ${colors.text}`}>
+                                    {action.priority}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                               <button
-                                onClick={() => handleEmailClick(action.emailId)}
-                                className="text-[11px] text-muted-foreground hover:text-amber-500 dark:hover:text-amber-400 truncate block mt-0.5 transition-colors text-left"
+                                onClick={() => handleComplete(action.id)}
+                                className="w-7 h-7 rounded-lg flex items-center justify-center text-green-600 dark:text-green-400 hover:bg-green-500/20 transition-colors"
+                                title="Complete"
                               >
-                                {action.emailSubject}
+                                <Check className="w-4 h-4" />
                               </button>
-                            )}
-                            <div className="flex items-center gap-2 mt-1.5">
-                              <span className="text-[11px] text-muted-foreground">
-                                {formatDistanceToNow(new Date(action.createdAt), { addSuffix: true })}
-                              </span>
+                              <button
+                                onClick={() => handleDismiss(action.id)}
+                                className="w-7 h-7 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                                title="Dismiss"
+                              >
+                                <X className="w-4 h-4" />
+                              </button>
                             </div>
                           </div>
-                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <button
-                              onClick={() => handleComplete(action.id)}
-                              className="w-7 h-7 rounded-lg flex items-center justify-center text-green-600 dark:text-green-400 hover:bg-green-500/20 transition-colors"
-                              title="Complete"
-                            >
-                              <Check className="w-4 h-4" />
-                            </button>
-                            <button
-                              onClick={() => handleDismiss(action.id)}
-                              className="w-7 h-7 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                              title="Dismiss"
-                            >
-                              <X className="w-4 h-4" />
-                            </button>
-                          </div>
                         </div>
-                      </div>
-                    ))}
+                      )
+                    })}
                   </div>
                 )}
               </div>
